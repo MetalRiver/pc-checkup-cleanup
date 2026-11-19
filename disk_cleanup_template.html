@@ -1,0 +1,323 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>磁盘清理工作台</title>
+<style>
+:root{color-scheme:light;--ink:#17263a;--muted:#526377;--line:#dbe3ec;--blue:#2054be;--soft:#edf3ff;--surface:#fff;--bg:#f2f5fa;--green:#176c49;--amber:#8a4a18}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.6 "Microsoft YaHei","PingFang SC",system-ui,sans-serif}
+button,select,input{font:inherit;color:inherit}
+a{color:var(--blue)}
+header{background:#162943;color:white}
+.frame{max-width:1180px;margin:auto;padding-inline:clamp(16px,4vw,44px)}
+header .frame{display:flex;justify-content:space-between;align-items:center;gap:12px;min-height:65px}
+header a{color:#dbebff;font-size:13px}
+.wordmark{font-weight:700;letter-spacing:.02em}
+main{padding-block:32px 120px}
+h1{margin:0;font-size:clamp(25px,4vw,37px);line-height:1.2;letter-spacing:-.035em}
+h2{font-size:18px;margin:0 0 12px}
+p{margin:8px 0;color:var(--muted)}
+small{color:var(--muted)}
+.summary{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;margin:24px 0 20px}
+.metric{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:15px 17px}
+.metric strong{display:block;font-size:23px;font-variant-numeric:tabular-nums;letter-spacing:-.04em}
+.capacity-bar{width:100%;height:6px;margin:10px 0 5px;overflow:hidden;border-radius:6px;background:#e8edf5}
+.capacity-bar span{display:block;height:100%;background:var(--blue);border-radius:inherit}
+.metric .gain,.positive{color:var(--green)}
+.negative,.impact{color:var(--amber)}
+nav{display:flex;gap:18px;border-bottom:1px solid var(--line);margin-bottom:16px;overflow:auto}
+nav button{background:none;border:0;border-bottom:3px solid transparent;border-radius:0;white-space:nowrap;padding:9px 1px}
+nav button[aria-selected=true]{color:var(--blue);border-color:var(--blue);font-weight:700}
+.panel{background:var(--surface);border:1px solid var(--line);border-radius:12px;overflow:hidden}
+.panel>p,.empty{padding:12px 18px}
+.table-head,.decision-main,.finding{display:grid;grid-template-columns:minmax(155px,1fr) minmax(220px,1.65fr) minmax(90px,.53fr) 88px;gap:16px;align-items:start;padding:13px 18px}
+.table-head{font-size:13px;color:var(--muted);background:#f6f8fc}
+.row+.row,.finding+.finding,.result+.result{border-top:1px solid var(--line)}
+.name{font-weight:700;overflow-wrap:anywhere}
+.number{font-variant-numeric:tabular-nums;font-weight:600;white-space:nowrap}
+.checkbox{display:flex;align-items:center;gap:7px;white-space:nowrap;cursor:pointer}
+.checkbox input{width:17px;height:17px;accent-color:var(--blue)}
+details{margin:0 18px 13px}
+summary{width:fit-content;color:var(--blue);cursor:pointer;font-size:13px}
+.detail{background:#f6f8fc;border-radius:8px;margin-top:7px;padding:8px 12px;color:var(--muted);overflow-wrap:anywhere}
+.detail p{margin:5px 0}
+.finding{grid-template-columns:minmax(180px,2fr) minmax(100px,.6fr) minmax(140px,1fr);align-items:start}
+.findings-card+.findings-card{margin-top:12px}
+.findings-head{display:flex;justify-content:space-between;gap:12px;align-items:baseline;padding:12px 18px;background:#f6f8fc;border-bottom:1px solid var(--line)}
+.findings-head h2{margin:0;font-size:16px}
+.more-findings{margin:10px 18px}
+.more-findings .finding{padding-inline:0}
+.scan-coverage{margin:0 0 12px;padding:10px 14px;background:var(--soft);border-radius:8px}
+.result{padding:12px 18px}
+.result div{overflow-wrap:anywhere}
+.tools{display:flex;gap:10px;flex-wrap:wrap;margin:0 0 12px}
+.tools input,.tools select{padding:7px 10px;background:var(--surface);border:1px solid var(--line);border-radius:8px}
+.tools input{flex:1 1 210px}
+.bar{position:fixed;bottom:0;inset-inline:0;background:var(--surface);border-top:1px solid var(--line);padding:13px 0;z-index:2}
+.bar .frame{display:flex;justify-content:space-between;align-items:center;gap:12px}
+.bar small{display:block}
+button{cursor:pointer}
+button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible,summary:focus-visible{outline:3px solid #7ca2ff;outline-offset:3px}
+.primary{background:var(--blue);color:#fff;border:none;border-radius:8px;padding:10px 14px;white-space:nowrap}
+.primary:disabled{background:#dce3ec;color:#536279;cursor:default}
+.command{display:block;overflow:auto;background:#f1f5fb;padding:8px 11px;border-radius:6px;margin:12px 0;color:#234166}
+[hidden]{display:none!important}
+@media(max-width:670px){.table-head{display:none}.decision-main,.finding{grid-template-columns:1fr 1fr;gap:8px 14px}.decision-main .description,.finding>div:first-child{grid-column:1/-1}.decision-main>div:first-child{grid-column:1/-1}.checkbox{justify-content:end}.summary{grid-template-columns:repeat(auto-fit,minmax(156px,1fr))}.bar .frame{flex-wrap:wrap}.primary{white-space:normal}main{padding-bottom:160px}}
+</style>
+</head>
+<body>
+<header><div class="frame"><span class="wordmark">磁盘清理工作台</span><a id="history" href="disk_cleanup_decision.legacy.html">查看旧版报告</a></div></header>
+<main class="frame">
+  <h1 id="title">深度清理</h1>
+  <p id="subtitle"></p>
+  <div class="summary" id="summary"></div>
+  <nav id="tabs" aria-label="工作台视图">
+    <button type="button" data-tab="decisions" aria-controls="decisions">待你决定</button>
+    <button type="button" data-tab="findings" aria-controls="findings">全部发现</button>
+    <button type="button" data-tab="results" aria-controls="results">执行记录</button>
+  </nav>
+  <section id="decisions" aria-label="待你决定"></section>
+  <section id="findings" aria-label="全部发现" hidden>
+    <div id="coverage"></div>
+    <div class="tools"><input id="search" type="search" placeholder="搜索名称或路径" aria-label="搜索名称或路径"><select id="disk" aria-label="筛选磁盘"><option value="">全部磁盘</option></select></div>
+    <div id="found"></div>
+  </section>
+  <section id="results" aria-label="执行记录" hidden></section>
+</main>
+<footer class="bar" id="bar" hidden><div class="frame">
+  <div><strong id="selection" aria-live="polite">尚未选择</strong><small id="export-status">选择将返回发起本轮任务的 WorkBuddy 对话。</small></div>
+  <button class="primary" type="button" id="submit" disabled>交给 WorkBuddy 执行</button>
+</div></footer>
+<script type="application/json" id="run"><!--RUN-DATA--></script>
+<script>
+const get = id => document.getElementById(id);
+const escape = value => String(value ?? '').replace(/[&<>"']/g, ch => ({
+  '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+}[ch]));
+const size = bytes => {
+  if (!Number.isFinite(bytes)) return '待测';
+  if (Math.abs(bytes) < 1024 ** 3) return (bytes / 1024 ** 2).toFixed(2) + ' MiB';
+  return (bytes / 1024 ** 3).toFixed(2) + ' GiB';
+};
+const signed = bytes => Number.isFinite(bytes) ? (bytes >= 0 ? '+' : '−') + size(Math.abs(bytes)) : '待测';
+const localTime = time => time ? time.replace('T', ' ') : '时间未知';
+const actionName = {'read-space':'读取磁盘余量',recycle:'清空回收站','recycle-review':'核实后清空该盘回收站',uninstall:'卸载软件',migrate:'迁移数据','app-clean':'清理应用存储',system:'调整系统设置'};
+let run;
+try { run = JSON.parse(get('run').textContent); } catch { run = null; }
+
+function tab(id) {
+  for (const button of document.querySelectorAll('[data-tab]')) {
+    const selected = button.dataset.tab === id;
+    get(button.dataset.tab).hidden = !selected;
+    button.setAttribute('aria-selected', String(selected));
+  }
+  get('bar').hidden = id !== 'decisions' || !run.proposals.length || Boolean(run.deep);
+}
+
+function delta(before, after, disk) {
+  const start = before?.volumes.find(row => row.disk === disk)?.free;
+  const end = after?.volumes.find(row => row.disk === disk)?.free;
+  return {start, end, change: Number.isFinite(start) && Number.isFinite(end) ? end - start : null};
+}
+
+function measurement(name, stage) {
+  if (!stage) return '';
+  return '<div class="result"><h2>' + name + '</h2>' + run.targets.map(disk => {
+    const result = delta(stage.before, stage.after, disk);
+    return '<div><b>' + disk + ' 盘</b> · ' + size(result.start) + ' → ' + size(result.end)
+      + ' · <strong class="' + (result.change < 0 ? 'negative' : 'positive') + '">'
+      + signed(result.change) + '</strong></div>';
+  }).join('') + '<small>' + escape(localTime(stage.before?.time)) + ' → '
+  + escape(localTime(stage.after?.time)) + '</small></div>';
+}
+
+function findings() {
+  const query = get('search').value.trim().toLowerCase();
+  const disk = get('disk').value;
+  const found = run.found.filter(row => (!disk || row.disk === disk)
+    && (row.name + ' ' + row.path).toLowerCase().includes(query));
+  const renderRow = row => '<div class="finding">'
+    + '<div><span class="name">' + escape(row.name) + '</span><br><small>' + escape(row.path)
+    + '</small></div><span class="number">' + (row.pending || row.errors ? '≥ ' : '') + size(row.bytes)
+    + '</span><small>' + escape(row.coverage) + (row.pending ? ' · 扫描未完成' : '')
+    + (row.errors ? ' · 未读取 ' + row.errors + ' 处' : '')
+    + (row.links ? ' · 跳过重解析项或重复硬链接 ' + row.links + ' 处' : '') + '</small></div>';
+  const sections = run.targets.map(target => {
+    const items = found.filter(row => row.disk === target);
+    if (!items.length) return '';
+    const visible = query ? items : items.slice(0, 8);
+    const more = items.slice(visible.length);
+    return '<div class="panel findings-card"><div class="findings-head"><h2>' + target
+      + ' 盘占用</h2><small>' + items.length + ' 项</small></div>' + visible.map(renderRow).join('')
+      + (more.length ? '<details class="more-findings"><summary>展开其余 ' + more.length
+        + ' 项</summary>' + more.map(renderRow).join('') + '</details>' : '') + '</div>';
+  }).join('');
+  get('found').innerHTML = sections || '<div class="panel empty">当前没有符合条件的发现。</div>';
+}
+
+function renderDecisions() {
+  const rows = new Map(run.found.map(row => [row.id, row]));
+  if (run.deep || !run.proposals.length) {
+    get('decisions').innerHTML = '<div class="panel"><p>' + (run.deep
+      ? '本轮已提交。处理状态见执行记录。' : '本轮没有需要你决定的项目。') + '</p></div>';
+    return;
+  }
+  get('decisions').innerHTML = '<p>勾选你愿意处理的项目，一次提交。</p><div class="panel">'
+    + '<div class="table-head"><span>对象</span><span>AI 建议</span><span>预计收益</span><span>本轮选择</span></div>'
+    + run.proposals.map(p => {
+      const row = rows.get(p.id);
+      const preview = p.action === 'recycle'
+        ? '<p>在资源管理器打开回收站，按“原位置”核对 ' + row.disk + ' 盘的文件。</p>' : '';
+      return '<article class="row"><div class="decision-main"><div><div class="name">' + row.disk
+        + ' 盘 · ' + escape(row.name) + '</div><small>' + (row.pending || row.errors ? '已读取部分 ' : '当前记录 ') + size(row.bytes) + '</small></div>'
+        + '<div class="description"><b>' + escape(actionName[p.action]) + '</b><p>'
+        + escape(p.recommendation) + '</p><small class="impact">' + escape(p.impact) + '</small></div>'
+        + '<span class="number">' + size(p.estimate) + '</span>'
+        + '<label class="checkbox"><input type="checkbox" value="' + escape(p.id)
+        + '" aria-label="选中 ' + row.disk + ' 盘 ' + escape(row.name) + '">选中</label></div>'
+        + '<details><summary>查看路径与处理方式</summary><div class="detail"><p>' + escape(row.path)
+        + '</p>' + (p.target ? '<p>' + escape(p.target) + '</p>' : '') + preview + '</div></details></article>';
+    }).join('') + '</div>';
+}
+
+function selected() {
+  const ids = Array.from(get('decisions').querySelectorAll('input:checked'), input => input.value);
+  return run.proposals.filter(item => ids.includes(item.id));
+}
+
+function selectionSummary() {
+  const chosen = selected();
+  const known = chosen.filter(item => Number.isFinite(item.estimate));
+  const unknown = chosen.length - known.length;
+  const estimates = known.length ? ' · 已估算 ' + size(known.reduce((sum, item) => sum + item.estimate, 0)) : '';
+  const disks = [...new Set(chosen.map(item => run.found.find(row => row.id === item.id).disk))].join('、');
+  get('selection').textContent = chosen.length
+    ? '已选 ' + chosen.length + ' 项 · ' + disks + ' 盘' + estimates + (unknown ? ' · ' + unknown + ' 项待测' : '')
+    : '尚未选择';
+  get('submit').disabled = !chosen.length;
+  get('export-status').textContent = '选择将返回发起本轮任务的 WorkBuddy 对话。';
+}
+
+let sending = false;
+let submitted = false;
+function lockSelection(lock) {
+  get('decisions').querySelectorAll('input[type=checkbox]').forEach(input => input.disabled = lock);
+  get('submit').disabled = lock || !selected().length;
+}
+async function readStatus() {
+  try {
+    const response = await fetch('status', {cache:'no-store'});
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || '连接失效');
+    if (data.reviewed) {
+      if (!run.deep) location.reload();
+      return;
+    }
+    if (data.submitted) {
+      submitted = true;
+      get('decisions').querySelectorAll('input[type=checkbox]').forEach(input => input.checked = data.ids.includes(input.value));
+      selectionSummary();
+      lockSelection(true);
+      get('export-status').textContent = data.message;
+    }
+    if (!data.finished) setTimeout(readStatus, 2000);
+  } catch {
+    get('export-status').textContent = '连接中断。请回到原对话查看回执或重新打开本轮工作台。';
+  }
+}
+async function submitSelection() {
+  if (sending || submitted) return;
+  const ids = selected().map(item => item.id);
+  if (!ids.length) return;
+  if (!run.liveReview && !run.reviewUrl) return;
+  const payload = JSON.stringify({runId:run.runId, revision:run.revision, ids});
+  if (!run.liveReview) {
+    const form = document.createElement('form');
+    form.method = 'POST';
+    form.action = new URL('submit', run.reviewUrl).href;
+    const field = document.createElement('input');
+    field.type = 'hidden'; field.name = 'selection'; field.value = payload;
+    form.append(field); document.body.append(form); form.submit(); return;
+  }
+  sending = true;
+  lockSelection(true);
+  try {
+    const response = await fetch('submit', {method:'POST', headers:{'Content-Type':'application/json'}, body:payload});
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || '提交失败');
+    submitted = true;
+    get('export-status').textContent = '已提交，等待当前对话领取。';
+  } catch (error) {
+    get('export-status').textContent = error.message;
+    lockSelection(false);
+  } finally { sending = false; }
+}
+
+if (!run) {
+  get('title').textContent = '磁盘概况';
+  get('tabs').hidden = true;
+  get('history').hidden = true;
+  get('decisions').innerHTML = '<div class="panel empty">暂无排查数据。</div>';
+} else {
+  get('history').href = run.historyLink;
+  get('history').hidden = !run.archived;
+  get('title').textContent = {basic:'基础清理结果',scan:'磁盘概况',deep:'深度清理'}[run.mode];
+  const latest = run.deep?.reviews?.at(-1) ?? run.deep?.after ?? run.basic?.after ?? run.created;
+  get('subtitle').textContent = '目标 ' + run.targets.join('、') + ' 盘 · 可用空间采样 ' + localTime(latest.time);
+  get('summary').innerHTML = latest.volumes.map(row => {
+    const basicDelta = delta(run.basic?.before, run.basic?.after, row.disk).change;
+    const used = Number.isFinite(row.total) && row.total > 0
+      ? Math.round(Math.max(0, Math.min(100, (1 - row.free / row.total) * 100))) : null;
+    const bar = used === null ? '' : '<div class="capacity-bar" role="meter" aria-label="' + row.disk
+      + ' 盘占用百分比" aria-valuemin="0" aria-valuemax="100" aria-valuenow="' + used
+      + '"><span style="width:' + used + '%"></span></div>';
+    return '<div class="metric"><small>' + row.disk + ' 盘当前可用</small><strong>' + size(row.free)
+      + '</strong>' + bar + '<small>总容量 ' + size(row.total) + (used === null ? '' : ' · 已用 ' + used + '%')
+      + (basicDelta === null ? '' : ' · 基础清理 ' + signed(basicDelta))
+      + '</small></div>';
+  }).join('');
+  const partial = run.found.filter(row => row.pending || row.errors).length;
+  if (run.scanTime || partial) {
+    get('coverage').innerHTML = '<div class="scan-coverage"><small>' + (run.scanTime
+      ? '占用扫描 ' + escape(localTime(run.scanTime)) : '占用扫描')
+      + (partial ? ' · ' + partial + ' 项只取得部分读数，列表已标注' : '') + '</small></div>';
+  }
+  run.targets.forEach(disk => get('disk').add(new Option(disk + ' 盘', disk)));
+  renderDecisions();
+  findings();
+  const basicDetails = (run.basic?.groups ?? []).map(group => '<div class="result"><b>'
+    + group.disk + ' 盘 · ' + escape(group.name) + '</b><div>处理 ' + group.done + ' 个 · 跳过 '
+    + group.skipped + ' 个 · 已处理文件逻辑大小 ' + size(group.removed) + '</div>'
+    + (group.examples.length ? '<small>' + group.examples.map(escape).join('<br>') + '</small>' : '') + '</div>').join('');
+  const deepDetails = (run.deep?.entries ?? []).map(row => '<div class="result"><b>'
+    + row.disk + ' 盘 · ' + escape(row.name) + '</b><div>' + escape(actionName[row.action])
+    + ' · ' + escape(row.status) + '</div><small>' + escape(row.note) + '</small></div>').join('');
+  const notes = [...run.warnings, ...(run.basic?.notes ?? [])];
+  get('results').innerHTML = '<div class="panel">' + measurement('基础清理 · 磁盘实测', run.basic)
+    + (run.basic && !basicDetails ? '<div class="result">未发现符合当前规则的基础项目。</div>' : basicDetails)
+    + measurement('深度处理 · 磁盘实测', run.deep ? {...run.deep, after:run.deep.reviews?.at(-1) ?? run.deep.after} : null)
+    + deepDetails + (notes.length ? '<details class="result"><summary>读取与处理备注（' + notes.length
+    + '）</summary><div class="detail">' + notes.map(escape).join('<br>') + '</div></details>' : '')
+    + '</div>';
+  get('search').addEventListener('input', findings);
+  get('disk').addEventListener('change', findings);
+  get('decisions').addEventListener('change', selectionSummary);
+  get('submit').addEventListener('click', submitSelection);
+  if (run.liveReview) readStatus();
+  if (!run.liveReview && !run.reviewUrl && run.mode === 'deep' && !run.deep) {
+    lockSelection(true);
+    get('submit').textContent = '等待原对话连接';
+    get('export-status').textContent = '这是本轮快照。在原对话打开交互工作台后，可从本页刷新进入本轮提交。';
+  }
+  get('tabs').addEventListener('click', event => {
+    const button = event.target.closest('[data-tab]');
+    if (button) tab(button.dataset.tab);
+  });
+  if (run.mode === 'scan') document.querySelector('[data-tab="decisions"]').hidden = true;
+  tab(run.deep || run.mode === 'basic' ? 'results' : run.mode === 'scan' ? 'findings' : 'decisions');
+}
+</script>
+</body>
+</html>
