@@ -1,6 +1,6 @@
 ---
 name: disk-space-checkup-cleanup
-version: 1.2.1
+version: 1.2.2
 display_name: 全自动化系统电脑体检与清理
 display_name_en: Fully Automated System PC Checkup and Cleanup
 description: 在 Windows 上识别本机磁盘、排查空间占用、执行基础清理或生成可选择的深度清理 HTML，并复核各盘可用空间。用于“清理电脑”“C 盘快满了”“看看空间去哪了”等请求。
@@ -28,6 +28,10 @@ description_en: Identify local disks on Windows, analyze space usage, run basic 
 
 在本技能目录（与 `SKILL.md` 同层）运行脚本：这里有 `cleanup.py`、`review_bridge.py`、`disk_cleanup_template.html`，各轮数据写入本目录的 `runs/`。使用 Python 3.10+（以下用 python 表示）。
 
+## 成果报告
+
+每轮收尾都会产出同一套横版报告 `清理成果报告.svg`（1600×940，另有同名 `.html` 外壳可直接打开或分享），固定包含五块：累计空出、本轮释放、各盘起始→当前、本轮回执、本轮未处理。累计口径以技能目录下 `baseline.json` 记录的最早一次扫描为基线；该文件在首次扫描时自动写入，不要手工改写，也不要随安装包分发。
+
 ## 识别与选择
 
 1. 运行 `python cleanup.py drives`，给出本机固定盘的容量、可用空间和紧张程度。用户只要求看看空间时，运行 `python cleanup.py scan --drives C D`，只做排查。
@@ -46,6 +50,7 @@ description_en: Identify local disks on Windows, analyze space usage, run basic 
 4. 有深度决策项时，调用项目 MCP 的 open_review(run_id=本轮编号)，立即在原对话给出可点击的 page 链接，并调用 wait_review(handle)。每次返回等待状态时继续调用，保持当前任务；用户取消或超时后告知。handle 为任务私有参数，仅向用户展示 page。页面勾选的对象通过该工具返回。只要用户正在使用已有的有效深度轮次，就复用该轮并核实状态，不重复执行基础清理。收到后，先在同一对话逐项说明盘符、对象和动作，再用返回的 runFile 和 choiceFile 执行 `python cleanup.py apply --run <runFile> --input <choiceFile>`。不要自行重建或增补勾选清单。交互中断且未收到时不执行。
 
 apply 现在会**真实执行两类动作**：回收站按指纹校验后清空；`migrate` 迁移会用 robocopy /MOVE 把勾选的目录真正搬到目标盘并删除源（带同盘/重叠/空间不足校验，失败会标注"未确认完成"不强行继续）。执行后在对话里逐项回报每个迁移的源→目标、成功与否，并按要求提醒应用数据需在应用后台改存储位置。系统项（虚拟内存、休眠、组件存储）脚本不改动配置，只标记"待 WorkBuddy 打开指定入口"，由你按 target 里的官方入口操作后回填：在应用或系统设置项上，复核实际配置，已生效或已配置待重启的项目只记录和回报。
-5. 对 WorkBuddy 接续处理的项目，写入形如 `[{"id":"本轮条目 ID","status":"完成","note":"已验证的结果"}]` 的 JSON，可用状态为完成、部分完成、跳过、未完成。运行 `python cleanup.py verify --run <run.json> --input <复核回填.json>` 重新读取磁盘。有新采样、无人工动作回填时可省略 `--input`。向用户交付本轮新版 HTML 和简短实测结果。
+5. 对 WorkBuddy 接续处理的项目，写入形如 `[{"id":"本轮条目 ID","status":"完成","note":"已验证的结果"}]` 的 JSON，可用状态为完成、部分完成、跳过、未完成。运行 `python cleanup.py verify --run <run.json> --input <复核回填.json>` 重新读取磁盘。有新采样、无人工动作回填时可省略 `--input`。**verify 结束时会自动生成本轮横版成果报告**（`runs/<轮次>/清理成果报告.svg` 与 `.html`，并复制到技能目录根作为最新一份），命令会打印报告路径；交付时把 HTML 报告链接和简短实测结果一起给用户，不要只给数字。
+6. 需要单独重出报告时运行 `python cleanup.py report --run <run.json>`（只读生成，不改变本轮状态）。基础清理轮次（`basic`）结束时会自动生成只含基础项的同类报告。
 
 结果使用本轮执行前和复核后的可用空间差，逐盘计算。技能目录的 `disk_cleanup_decision.html` 直接展示最近发布的排查、深度建议或复核结果。每轮另保留 `runs/<轮次>/` 下的独立快照。基础清理的结果在对话里汇报，本轮数字也保存在任务记录里。

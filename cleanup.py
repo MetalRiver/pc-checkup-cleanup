@@ -623,10 +623,13 @@ def create_run(args, disks):
             warnings.extend(auto_plan(state, args.seconds))
     if args.command in ("basic", "deep"):
         state["basic"] = execute_basic(disks)
+    record_baseline(state["created"])
     directory.mkdir(parents=True, exist_ok=True)
     emit(directory, state, publish=args.command in ("scan", "deep"))
+    report = write_report(directory, state, publish=False) if args.command == "basic" else None
     print(json.dumps({"run": str(directory / "run.json"),
                       "html": str(directory / "disk_cleanup_decision.html"),
+                      "report": (report or {}).get("html"),
                       "basic": state.get("basic"), "decisions": len(state["proposals"])},
                      ensure_ascii=False))
 
@@ -777,9 +780,260 @@ def verify(state, receipt):
     state["deep"].setdefault("reviews", []).append(sample(state["targets"]))
 
 
+REPORT_SVG = "清理成果报告.svg"
+REPORT_HTML = "清理成果报告.html"
+BASELINE = BASE / "baseline.json"
+ACTION_LABEL = {"recycle": "清空回收站", "recycle-review": "清空回收站", "migrate": "迁移目录",
+                "uninstall": "卸载应用", "app-clean": "应用内清理", "system": "系统调整",
+                "read-space": "读取空间"}
+STATUS_COLOR = {"完成": "#0f766e", "有残留": "#b45309", "未确认完成": "#b91c1c",
+                "待 WorkBuddy 打开指定入口": "#1d4ed8"}
+
+
+def _gb(value):
+    return f"{value / 1024 ** 3:.2f}"
+
+
+def _signed_gb(value):
+    return f"{value / 1024 ** 3:+.2f}"
+
+
+def _cut(text, limit):
+    text = str(text)
+    return text if len(text) <= limit else text[:limit - 1] + "…"
+
+
+def _volumes(sample_value):
+    return {v["disk"]: v for v in (sample_value or {}).get("volumes", []) if "free" in v}
+
+
+def _round_sample(state):
+    """本轮收尾的实际读数：优先最后一次复核，其次执行后，最后基础清理后。"""
+    deep = state.get("deep") or {}
+    if deep.get("reviews"):
+        return deep["reviews"][-1]
+    if deep.get("after"):
+        return deep["after"]
+    if (state.get("basic") or {}).get("after"):
+        return state["basic"]["after"]
+    return state.get("created")
+
+
+def record_baseline(created):
+    """首次扫描时记录基线，之后所有报告都以它为累计起点。"""
+    if BASELINE.is_file() or not (created or {}).get("volumes"):
+        return
+    dump(BASELINE, {"time": created.get("time"), "volumes": created["volumes"],
+                    "note": "首次扫描自动记录的累计基线，请勿手工改写"})
+
+
+def report_data(state, directory):
+    final = _round_sample(state)
+    start = state.get("created") or final
+    before = (state.get("deep") or {}).get("before") or (state.get("basic") or {}).get("before") or start
+    baseline, rounds, objects = start, 1, 0
+    for path in sorted((BASE / "runs").glob("*/run.json")):
+        try:
+            other = load(path)
+        except Exception:
+            continue
+        created = other.get("created") or {}
+        if created.get("volumes") and str(created.get("time", "")) and \
+                (not baseline.get("time") or created["time"] < baseline.get("time", "")):
+            baseline = created
+        deep = other.get("deep") or {}
+        basic = other.get("basic") or {}
+        if deep.get("entries") or basic.get("groups"):
+            rounds += 1
+        objects += sum(1 for e in deep.get("entries", []) if e.get("status") == "完成")
+        objects += sum(int(g.get("done") or 0) for g in basic.get("groups", []))
+    rounds = max(1, rounds)
+    if BASELINE.is_file():
+        try:
+            recorded = load(BASELINE)
+        except Exception:
+            recorded = None
+        if (recorded or {}).get("volumes"):
+            baseline = recorded
+    start_vol, base_vol, final_vol = _volumes(start), _volumes(baseline), _volumes(final)
+    disks = [d for d in state.get("targets", []) if d in final_vol]
+    this_round = sum(final_vol[d]["free"] - start_vol.get(d, final_vol[d])["free"] for d in disks)
+    base_disks = [d for d in disks if d in base_vol]
+    cumulative = sum(final_vol[d]["free"] - base_vol[d]["free"] for d in base_disks)
+    entries = list((state.get("deep") or {}).get("entries") or [])
+    selected = set((state.get("deep") or {}).get("selected") or [])
+    found = {row["id"]: row for row in state.get("found", [])}
+    pending = [{"name": found.get(p["id"], {}).get("name") or p.get("recommendation", "未命名项目"),
+                "action": ACTION_LABEL.get(p["action"], p["action"])}
+               for p in state.get("proposals", []) if p["id"] not in selected]
+    basic_done = sum(int(g.get("done") or 0) for g in (state.get("basic") or {}).get("groups", []))
+    basic_bytes = sum(int(g.get("removed") or 0) for g in (state.get("basic") or {}).get("groups", []))
+    return {
+        "runId": state.get("runId", ""), "mode": state.get("mode", ""),
+        "start": str(start.get("time", ""))[:10], "end": str((final or {}).get("time", ""))[:16].replace("T", " "),
+        "disks": disks, "start_vol": start_vol, "before_vol": _volumes(before),
+        "final_vol": final_vol, "base_vol": base_vol, "this_round": this_round,
+        "cumulative": cumulative, "has_baseline": bool(base_disks),
+        "rounds": rounds, "objects": objects, "entries": entries, "pending": pending,
+        "basic_done": basic_done, "basic_bytes": basic_bytes,
+        "basic_groups": [g for g in (state.get("basic") or {}).get("groups", []) if g.get("done")],
+        "done": sum(1 for e in entries if e.get("status") == "完成"),
+        "warn": sum(1 for e in entries if e.get("status") in ("有残留", "未确认完成")),
+        "manual": sum(1 for e in entries if str(e.get("status", "")).startswith("待 WorkBuddy")),
+    }
+
+
+def render_report(data):
+    total_base = sum(data["base_vol"][d]["free"] for d in data["disks"] if d in data["base_vol"])
+    total_now = sum(data["final_vol"][d]["free"] for d in data["disks"])
+    big = _signed_gb(data["cumulative"] if data["has_baseline"] else data["this_round"])
+    big_width = len(big) * 49
+    scope = " + ".join(data["disks"]) or "本机"
+    if data["has_baseline"]:
+        sub = f"{scope} 合计可用：{_gb(total_base)} → {_gb(total_now)} GB"
+        kind = "磁盘实际空出 · 累计"
+    else:
+        sub = f"{scope} 本轮执行前后：{_gb(sum(v['free'] for v in data['before_vol'].values()))} → {_gb(total_now)} GB"
+        kind = "磁盘实际空出 · 本轮"
+    title = "基础清理成果报告" if data["mode"] == "basic" else "磁盘清理成果报告"
+    meta = f"{data['start']} 首次记录 → {data['end']} 实测　·　累计口径自首次扫描起算"
+
+    cards = []
+    for i, disk in enumerate(data["disks"][:3]):
+        x = 88 + i * 482
+        after = data["final_vol"][disk]
+        base_free = data["base_vol"].get(disk, after)["free"]
+        delta = after["free"] - base_free
+        ratio = after["free"] / after["total"] if after.get("total") else 0
+        color = "#0f766e" if delta >= 0 else "#b91c1c"
+        bar = "#b91c1c" if ratio < 0.15 else ("#b45309" if ratio < 0.30 else "#14b8a6")
+        cards.append(f'''  <rect x="{x}" y="470" width="458" height="110" rx="14" fill="#fbfdff" stroke="#e7edf4"/>
+  <text x="{x + 22}" y="502" font-size="18" font-weight="800" fill="#16223a">{disk} 盘</text>
+  <text x="{x + 436}" y="502" font-size="16" font-weight="800" fill="{color}" text-anchor="end">{_signed_gb(delta)} GB</text>
+  <text x="{x + 22}" y="532" font-size="13" fill="#5b6b84">起始 {_gb(base_free)} → 当前 {_gb(after["free"])} GB</text>
+  <rect x="{x + 22}" y="548" width="414" height="8" rx="4" fill="#e6edf5"/>
+  <rect x="{x + 22}" y="548" width="{max(4, round(414 * ratio))}" height="8" rx="4" fill="{bar}"/>
+  <text x="{x + 22}" y="574" font-size="11.5" fill="#8492a6">当前可用占比 {ratio * 100:.0f}%</text>''')
+
+    rows = []
+    for i, entry in enumerate(data["entries"][:6]):
+        y = 692 + i * 26
+        dot = STATUS_COLOR.get(entry.get("status"), "#64748b")
+        rows.append(f'''  <circle cx="86" cy="{y - 5}" r="4" fill="{dot}"/>
+  <text x="102" y="{y}" font-size="13.5" fill="#334155">{_cut(entry.get("name", "未命名项目"), 22)}</text>
+  <text x="352" y="{y}" font-size="12.5" fill="#8492a6">{entry.get("disk", "")} 盘 · {ACTION_LABEL.get(entry.get("action"), entry.get("action", ""))}</text>
+  <text x="556" y="{y}" font-size="12.5" font-weight="600" fill="{dot}">{_cut(entry.get("status", ""), 12)}</text>''')
+    if len(data["entries"]) > 6:
+        rows.append(f'  <text x="102" y="{692 + 6 * 26}" font-size="12" fill="#8492a6">'
+                    f'另有 {len(data["entries"]) - 6} 项，见本轮工作台</text>')
+    for group in data["basic_groups"][:max(0, 6 - len(data["entries"]))]:
+        y = 692 + len(rows) * 26
+        rows.append(f'''  <circle cx="86" cy="{y - 5}" r="4" fill="#0f766e"/>
+  <text x="102" y="{y}" font-size="13.5" fill="#334155">基础清理 · {_cut(group.get("name", ""), 15)}</text>
+  <text x="352" y="{y}" font-size="12.5" fill="#8492a6">{group.get("disk", "")} 盘 · {group.get("done", 0)} 个文件</text>
+  <text x="556" y="{y}" font-size="12.5" font-weight="600" fill="#0f766e">{_gb(group.get("removed", 0))} GB</text>''')
+    if not rows:
+        rows.append('  <text x="86" y="700" font-size="13" fill="#8492a6">本轮没有产生需要执行的项目，'
+                    '基础清理结果见上方统计。</text>')
+
+    pending = []
+    for i, item in enumerate(data["pending"][:5]):
+        y = 692 + i * 26
+        pending.append(f'''  <circle cx="1054" cy="{y - 5}" r="4" fill="#cbd5e1"/>
+  <text x="1070" y="{y}" font-size="13" fill="#475569">{_cut(item["name"], 17)}</text>
+  <text x="1330" y="{y}" font-size="12" fill="#8492a6">{item["action"]}</text>''')
+    if len(data["pending"]) > 5:
+        pending.append(f'  <text x="1070" y="{692 + 5 * 26}" font-size="12" fill="#8492a6">'
+                       f'另有 {len(data["pending"]) - 5} 项未处理</text>')
+    if not pending:
+        pending.append('  <text x="1054" y="700" font-size="13" fill="#0f766e">本轮建议已全部处理，无遗留项。</text>')
+
+    return f'''<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="940" viewBox="0 0 1600 940" font-family="Microsoft YaHei, PingFang SC, Segoe UI, sans-serif">
+  <defs>
+    <linearGradient id="top" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#1e3a8a"/><stop offset=".5" stop-color="#155e75"/><stop offset="1" stop-color="#0f766e"/>
+    </linearGradient>
+  </defs>
+  <rect width="1600" height="940" fill="#eef2f8"/>
+  <rect x="16" y="16" width="1568" height="908" rx="28" fill="#ffffff"/>
+  <rect x="16" y="16" width="1568" height="8" rx="4" fill="url(#top)"/>
+
+  <text x="56" y="80" font-size="30" font-weight="800" fill="#16223a">{title}</text>
+  <text x="56" y="112" font-size="13" fill="#8492a6">{meta}</text>
+  <rect x="1364" y="62" width="180" height="34" rx="17" fill="#f0fdfa" stroke="#99f6e4"/>
+  <circle cx="1384" cy="79" r="5" fill="#0d9488"/>
+  <text x="1398" y="84" font-size="12.5" font-weight="700" fill="#0f766e">本轮已完成</text>
+  <line x1="56" y1="132" x2="1544" y2="132" stroke="#eef2f7" stroke-width="1.5"/>
+
+  <rect x="56" y="152" width="700" height="240" rx="20" fill="#ecfdf5" stroke="#99f6e4" stroke-width="1.5"/>
+  <text x="88" y="196" font-size="13.5" font-weight="700" fill="#0d9488">{kind}</text>
+  <text x="86" y="292" font-size="82" font-weight="800" fill="#0f766e" letter-spacing="-3">{big}</text>
+  <text x="{86 + big_width}" y="292" font-size="30" font-weight="700" fill="#0f766e">GB</text>
+  <line x1="88" y1="316" x2="724" y2="316" stroke="#99f6e4" stroke-width="1.5" stroke-dasharray="4 4"/>
+  <text x="88" y="352" font-size="14" font-weight="700" fill="#43536b">{sub}</text>
+
+  <rect x="776" y="152" width="768" height="240" rx="20" fill="#f8fafc" stroke="#e7edf4"/>
+  <text x="804" y="192" font-size="15" font-weight="800" fill="#16223a">本轮成果</text>
+  <line x1="804" y1="206" x2="1516" y2="206" stroke="#eef2f7" stroke-width="1.5"/>
+  <text x="804" y="268" font-size="34" font-weight="800" fill="#0f766e">{_signed_gb(data["this_round"])}</text>
+  <text x="804" y="296" font-size="13" fill="#5b6b84">本轮实测释放 GB</text>
+  <text x="1004" y="268" font-size="34" font-weight="800" fill="#16223a">{data["done"]}</text>
+  <text x="1004" y="296" font-size="13" fill="#5b6b84">已完成项目</text>
+  <text x="1204" y="268" font-size="34" font-weight="800" fill="#b45309">{data["warn"] + data["manual"]}</text>
+  <text x="1204" y="296" font-size="13" fill="#5b6b84">待处理 / 需你操作</text>
+  <text x="1404" y="268" font-size="34" font-weight="800" fill="#16223a">{len(data["pending"])}</text>
+  <text x="1404" y="296" font-size="13" fill="#5b6b84">本轮未处理</text>
+  <line x1="804" y1="322" x2="1516" y2="322" stroke="#eef2f7" stroke-width="1.5"/>
+  <text x="804" y="352" font-size="13" fill="#5b6b84">基础清理：处理 {data["basic_done"]} 个缓存文件，释放 {_gb(data["basic_bytes"])} GB</text>
+
+  <rect x="56" y="412" width="1488" height="200" rx="20" fill="#ffffff" stroke="#e7edf4"/>
+  <text x="88" y="450" font-size="15" font-weight="800" fill="#16223a">各盘可用空间对比</text>
+  <text x="1512" y="450" font-size="12" fill="#8492a6" text-anchor="end">灰底为容量，青色为当前可用</text>
+{"".join(cards)}
+
+  <rect x="56" y="632" width="940" height="200" rx="20" fill="#ffffff" stroke="#e7edf4"/>
+  <text x="86" y="672" font-size="15" font-weight="800" fill="#16223a">本轮回执</text>
+  <text x="966" y="672" font-size="12" fill="#8492a6" text-anchor="end">逐项执行结果</text>
+{"".join(rows)}
+
+  <rect x="1024" y="632" width="520" height="200" rx="20" fill="#ffffff" stroke="#e7edf4"/>
+  <text x="1054" y="672" font-size="15" font-weight="800" fill="#16223a">本轮未处理</text>
+  <text x="1514" y="672" font-size="12" fill="#8492a6" text-anchor="end">可下一轮继续</text>
+{"".join(pending)}
+
+  <line x1="56" y1="860" x2="1544" y2="860" stroke="#eef2f7" stroke-width="1.5"/>
+  <text x="56" y="890" font-size="12" fill="#8492a6">口径：本轮数字为执行前后实测差值；累计以首次扫描基线为准，不含后台写入波动。</text>
+  <text x="1544" y="890" font-size="12" fill="#8492a6" text-anchor="end">途有引力 · 磁盘体检与清理</text>
+</svg>
+'''
+
+
+def write_report(directory, state, *, publish=True):
+    data = report_data(state, directory)
+    svg = render_report(data)
+    (directory / REPORT_SVG).write_text(svg, encoding="utf-8")
+    total_base = sum(data["base_vol"][d]["free"] for d in data["disks"] if d in data["base_vol"])
+    total_now = sum(data["final_vol"][d]["free"] for d in data["disks"])
+    hint = (f"累计口径：{data['start']} 首次记录 → {data['end']} 实测，合计 "
+            f"{_signed_gb(data['cumulative'])} GB（{_gb(total_base)} → {_gb(total_now)} GB）"
+            if data["has_baseline"] else
+            f"本轮口径：{data['start']} → {data['end']}，实测 {_signed_gb(data['this_round'])} GB")
+    html = f'''<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8"><title>清理成果报告</title>
+<style>html,body{{margin:0;padding:0}}body{{background:#eef2f8;min-height:100vh;display:flex;align-items:flex-start;justify-content:center;padding:24px 16px 40px;font-family:"Microsoft YaHei",sans-serif}}
+.wrap{{width:1280px;max-width:100%}}.wrap img{{width:100%;height:auto;display:block;border-radius:26px;box-shadow:0 18px 50px rgba(20,32,56,.16)}}
+.hint{{margin:14px 2px 0;font-size:12px;color:#8492a6;text-align:center}}</style></head>
+<body><div class="wrap"><img src="{REPORT_SVG}" alt="磁盘清理成果报告"><p class="hint">{hint}</p></div></body></html>'''
+    (directory / REPORT_HTML).write_text(html, encoding="utf-8")
+    if publish:
+        (BASE / REPORT_SVG).write_text(svg, encoding="utf-8")
+        (BASE / REPORT_HTML).write_text(html, encoding="utf-8")
+    return {"svg": str(directory / REPORT_SVG), "html": str(directory / REPORT_HTML)}
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=["drives", "scan", "basic", "deep", "drill", "recommend", "apply", "verify"])
+    parser.add_argument("command", choices=["drives", "scan", "basic", "deep", "drill", "recommend",
+                                            "apply", "verify", "report"])
     parser.add_argument("--drives", nargs="+", help="目标盘，例如 C D")
     parser.add_argument("--seconds", type=int, default=0,
                         help="每盘扫描预算秒数；0 表示不限时完整扫描（默认，真·全盘）")
@@ -815,6 +1069,11 @@ def main():
         parser.error("本轮正在处理或上次处理中断。请核对记录后再用新一轮继续。")
     try:
         state = load(run_path)
+        if args.command == "report":
+            if "deep" not in state and "basic" not in state:
+                parser.error("该轮只做了扫描，没有可汇总的清理结果。")
+            print(write_report(run_path.parent, state, publish=True)["html"])
+            return
         if args.command == "apply":
             apply_selection(run_path.parent, state, args.input)
         elif args.command == "recommend":
@@ -825,6 +1084,8 @@ def main():
             verify(state, args.input)
         emit(run_path.parent, state, publish=True)
         print(run_path.parent / "disk_cleanup_decision.html")
+        if args.command == "verify":
+            print(write_report(run_path.parent, state, publish=True)["html"])
     finally:
         lock.unlink()
 
