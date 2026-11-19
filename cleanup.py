@@ -391,43 +391,104 @@ USER_DIRS = {"downloads", "documents", "desktop", "pictures", "videos", "music",
 BIG_FILE_EXT = {".iso", ".img", ".zip", ".rar", ".7z", ".tar", ".gz", ".xz",
                 ".mp4", ".mkv", ".mov", ".avi", ".wmv", ".flv", ".vhd", ".vhdx",
                 ".vmdk", ".vdi", ".mdf", ".bak", ".dmp"}
-USER_MIN = 512 * 1024 ** 2
-FOLDER_MIN = 1024 ** 3
+USER_MIN = 256 * 1024 ** 2
+FOLDER_MIN = 200 * 1024 ** 2
+# 应用识别表：键为路径中出现的目录名片段（小写），值为展示名。
+# 命中后该类目录判定为 migrate-app，提示搬迁后需在应用内改存储位置。
 APP_TABLE = {
-    "wegame": "WeGame", "steam": "Steam", "steamapps": "Steam", "epic": "Epic Games",
-    "origin": "Origin", "battle.net": "暴雪战网", "blizzard": "暴雪战网",
-    "honkai": "米哈游（崩坏/星穹铁道）", "genshin": "原神", "mihoyo": "米哈游",
-    "naraka": "永劫无间", "qq飞车": "QQ飞车", "tencent": "腾讯游戏",
-    "netease": "网易游戏", "wechat": "微信", "微信": "微信", "dingtalk": "钉钉",
-    "钉钉": "钉钉", "adobe": "Adobe", "autodesk": "Autodesk", "microsoft office": "Office",
+    # 腾讯系
+    "wegame": "WeGame", "tencent": "腾讯", "qq": "QQ", "tim": "TIM",
+    "qq飞车": "QQ飞车", "qq游戏": "QQ游戏", "wechat": "微信", "微信": "微信",
+    "xwechat": "微信", "wechat files": "微信文件", "xwechat_files": "微信文件",
+    "wechatfiles": "微信文件", "tencent files": "QQ/微信文件", "mobilefile": "手机文件",
+    "qqmusic": "QQ音乐", "qqlive": "腾讯视频", "tencent meeting": "腾讯会议",
+    "wemeet": "腾讯会议", "企业微信": "企业微信", "wecom": "企业微信", "wxwork": "企业微信",
+    # 游戏平台与游戏
+    "steam": "Steam", "steamapps": "Steam", "epic": "Epic Games", "origin": "Origin",
+    "battle.net": "暴雪战网", "blizzard": "暴雪战网", "riot": "拳头游戏", "gog galaxy": "GOG",
+    "ubisoft": "育碧", "honkai": "米哈游（崩坏/星穹铁道）", "genshin": "原神",
+    "yuanshen": "原神", "mihoyo": "米哈游", "hoyoverse": "米哈游", "star rail": "星穹铁道",
+    "naraka": "永劫无间", "netease": "网易游戏", "网易": "网易游戏",
+    "bilibili": "哔哩哔哩", "bili": "哔哩哔哩", "mihoyo launcher": "米哈游启动器",
+    # 办公 / 通讯 / AI
+    "dingtalk": "钉钉", "钉钉": "钉钉", "feishu": "飞书", "lark": "飞书", "飞书": "飞书",
+    "workbuddy": "WorkBuddy", ".workbuddy": "WorkBuddy", "slack": "Slack",
+    "discord": "Discord", "telegram": "Telegram", "outlook": "Outlook",
+    "doubao": "豆包", "豆包": "豆包", "qianwen": "通义千问", "通义千问": "通义千问",
+    "tongyi": "通义千问", "huggingface": "Hugging Face", "cursor": "Cursor",
+    "windsurf": "Windsurf", "trae": "Trae", "claude": "Claude",
+    "microsoft office": "Office", "office": "Office", "wps": "WPS Office", "kingsoft": "WPS Office",
+    "adobe": "Adobe", "autodesk": "Autodesk", "notion": "Notion", "obsidian": "Obsidian",
+    # 浏览器
+    "chrome": "Chrome", "google": "Google", "microsoft edge": "Edge", "edge": "Edge",
+    "firefox": "Firefox", "chromium": "Chromium", "opera": "Opera", "360browser": "360浏览器",
+    # 开发工具 / 运行时
+    "jetbrains": "JetBrains", "intellij": "IntelliJ IDEA", "pycharm": "PyCharm",
+    "webstorm": "WebStorm", "goland": "GoLand", "vscode": "VS Code",
+    "visual studio code": "VS Code", "visual studio": "Visual Studio",
+    "nodejs": "Node.js", "npm": "npm", "yarn": "Yarn", "pnpm": "pnpm",
+    "cargo": "Rust", "rustup": "Rust", "rust": "Rust", "python": "Python",
+    "pip": "pip", "conda": "Conda", "anaconda": "Anaconda", "docker": "Docker",
+    "vmware": "VMware", "virtualbox": "VirtualBox", "android": "Android SDK",
+    "gradle": "Gradle", "maven": "Maven", "xcode": "Xcode", "git": "Git",
+    # 影音 / 云盘 / 下载
+    "cloudmusic": "网易云音乐", "网易云": "网易云音乐", "spotify": "Spotify",
+    "iqiyi": "爱奇艺", "youku": "优酷", "kugou": "酷狗音乐", "kuwo": "酷我音乐",
+    "baidunetdisk": "百度网盘", "baidu": "百度网盘", "aliyun": "阿里云盘",
+    "dropbox": "Dropbox", "onedrive": "OneDrive", "google drive": "Google Drive",
+    "xunlei": "迅雷", "thunder": "迅雷", "qbittorrent": "qBittorrent",
 }
+# 缓存目录名片段：命中判定为 cache，只给"用应用内清理"建议，绝不自动删除。
+CACHE_HINTS = {
+    "temp": "临时文件", "tmp": "临时文件", "cache": "缓存", "caches": "缓存",
+    "cachestorage": "缓存", "code cache": "编译缓存", "gpucache": "GPU 缓存",
+    "shadercache": "着色器缓存", "crashpad": "崩溃报告", "crashes": "崩溃报告",
+    "npm-cache": "npm 缓存", "_cacache": "npm 缓存", "pip-cache": "pip 缓存",
+    "__pycache__": "Python 缓存", "thumbcache": "缩略图缓存", "derivatedata": "派生数据",
+    "local storage": "本地存储", "service worker": "服务缓存", "gpu cache": "GPU 缓存",
+}
+# 用户主目录下需重点下钻的应用数据目录（这些通常不在 AppData 内）。
+USER_APP_DIRS = ("wechat files", "xwechat_files", "tencent files", "downloads",
+                 "documents", "desktop", "pictures", "videos", "music", "onedrive",
+                 ".workbuddy", ".vscode", ".gradle", ".m2", ".npm", ".cache")
 MIGRATION_ROOT = "磁盘清理迁移"
 
 
 def match_app(text):
     low = str(text).casefold()
+    # 规整化分隔符，令 "microsoft vs code" / "visual studio code" 等都能命中
+    compact = re.sub(r"[\s._\-]+", "", low)
     for key, name in APP_TABLE.items():
-        if key in low:
+        if key in low or re.sub(r"[\s._\-]+", "", key) in compact:
             return name
     return ""
 
 
 def classify_path(path):
-    """返回 (类别, 应用名)。类别：system / migrate-app / migrate-user / skip。
+    """返回 (类别, 名称)。类别：system / migrate-app / migrate-user / cache / skip。
 
-    判定顺序：先认具体应用/用户数据（层级可深），再判断是否处于系统保留顶层。
+    判定顺序：先认具体应用/用户数据/缓存（层级可深），再判断是否处于系统保留顶层。
+    缓存单独成类，只提示用应用内清理，绝不自动删除。
     """
     parts = [p.casefold() for p in Path(path).parts]
     head = parts[1] if len(parts) > 1 else ""
     tail = parts[-1] if parts else ""
     if tail in ("pagefile.sys", "hiberfil.sys", "swapfile.sys"):
         return "system", ""
+    # 缓存：仅识别应用数据区内部的缓存子目录，避免误判系统 Temp 根。
+    in_appdata = any(seg in ("appdata", "programdata", ".cache") for seg in parts)
+    if tail in CACHE_HINTS or (in_appdata and any(seg in CACHE_HINTS for seg in parts)):
+        cache_name = CACHE_HINTS.get(tail) or next(
+            (v for seg in parts for k, v in CACHE_HINTS.items() if seg == k), "应用缓存")
+        owner = match_app(" ".join(parts))
+        return "cache", f"{owner + ' · ' if owner else ''}{cache_name}"
     app = match_app(" ".join(parts))
     if app and len(parts) > 2:
         return "migrate-app", app
-    if "appdata" in parts and len(parts) > 4:
-        return "migrate-app", match_app(path) or "该应用"
-    if any(seg in USER_DIRS for seg in parts):
+    if in_appdata and len(parts) > 4:
+        # 未收录的应用用其目录名展示，避免笼统写"应用数据"
+        return "migrate-app", match_app(path) or (Path(path).name or "应用数据")
+    if any(seg in USER_DIRS for seg in parts) or head == "users":
         return "migrate-user", ""
     if Path(path).suffix.casefold() in BIG_FILE_EXT:
         return "migrate-user", ""
@@ -456,8 +517,37 @@ def _migration_target(state, source, path):
     return str(dst), target
 
 
+def build_composition(state, src_disk, units):
+    """把已扫描的目录按用途归类，回答「磁盘空间到底去哪了」。units 为 (path, bytes, kind, name)。"""
+    labels = {"system": "系统与保留", "app": "应用与游戏", "user": "用户文档",
+              "cache": "应用缓存与临时", "other": "其他未分类"}
+    buckets = {k: {"bytes": 0, "items": 0, "samples": []} for k in labels}
+    for path, size, kind, name in units:
+        if kind in ("system",):
+            key = "system"
+        elif kind in ("migrate-app",):
+            key = "app"
+        elif kind == "cache":
+            key = "cache"
+        elif kind in ("migrate-user",):
+            key = "user"
+        else:
+            key = "other"
+        bucket = buckets[key]
+        bucket["bytes"] += size
+        bucket["items"] += 1
+        if len(bucket["samples"]) < 6 and size >= FOLDER_MIN:
+            bucket["samples"].append({"name": name or Path(path).name, "path": str(path), "bytes": size})
+    total = sum(b["bytes"] for b in buckets.values())
+    categories = [{"key": k, "label": labels[k], "bytes": b["bytes"], "items": b["items"],
+                   "samples": sorted(b["samples"], key=lambda s: -s["bytes"])}
+                  for k, b in buckets.items()]
+    state["composition"] = {"disk": src_disk, "scannedBytes": total, "categories": categories,
+                            "note": "按目录用途归类统计（逻辑大小，含硬链接去重）；仅列识别到的部分。"}
+
+
 def auto_plan(state, seconds):
-    """扫描完成后自动识别可迁移内容与系统项，追加建议。不依赖外部手写清单。"""
+    """扫描完成后深度下钻应用/缓存目录，生成可迁移、可清理建议与占用构成。不依赖外部手写清单。"""
     notes = []
     disks = [r for r in disk_rows() if "free" in r]
     if not disks:
@@ -468,60 +558,125 @@ def auto_plan(state, seconds):
     if not src_disk:
         return notes
     known = {row["path"].casefold(): row for row in state["found"]}
-    candidates = {}
+    candidates = {}       # 可迁移 / 可清理候选
+    units = []            # 占用构成归类单元
 
-    def put(path, size):
+    def put(path, size, kind, name):
         key = str(path).casefold()
         if key in known:
-            candidates[key] = (known[key], size)
-        elif key not in candidates:
+            row = known[key]
+        elif key in candidates:
+            return
+        else:
             row = {"id": uuid.uuid4().hex, "disk": src_disk, "path": str(path),
-                   "name": Path(path).name, "bytes": size, "coverage": "自动识别的可迁移内容",
+                   "name": Path(path).name, "bytes": size, "coverage": "自动识别",
                    "directory": Path(path).is_dir(), "links": 0, "errors": 0, "pending": False}
-            candidates[key] = (row, size)
+        row["kind"] = kind
+        row["kindName"] = name
+        candidates[key] = (row, size, kind, name)
 
+    def scan_folder(folder):
+        """下钻一个目录，把直接子项作为归类单元；返回子项 (path, size, kind, name)。"""
+        try:
+            if not folder.is_dir() or is_link(folder.lstat()):
+                return []
+            children, _ = inspect_volume(src_disk, seconds, folder)
+        except OSError:
+            return []
+        refined_done.add(str(folder).casefold().rstrip("\\") + "\\")
+        out = []
+        for child in children:
+            size = child["bytes"]
+            if not size:
+                continue
+            kind, name = classify_path(child["path"])
+            out.append((child["path"], size, kind, name))
+            if size >= FOLDER_MIN and kind in ("migrate-app", "migrate-user", "cache"):
+                put(Path(child["path"]), size, kind, name)
+        return out
+
+    # 1) 顶层构成：卷根直接子项已含递归合计，先整体归类。
+    #    应用/用户/缓存类顶层目录若下钻失败，需以整体兜底，避免这部分空间凭空消失。
+    refined_prefixes = []
+    refined_done = set()
+    for row in list(state["found"]):
+        if row["disk"] != src_disk:
+            continue
+        kind, name = classify_path(row["path"])
+        if row.get("directory") and kind in ("migrate-app", "migrate-user", "cache"):
+            refined_prefixes.append(str(row["path"]).casefold().rstrip("\\") + "\\")
+            continue
+        units.append((row["path"], row["bytes"], kind, name))
+
+    # 2) 用户目录：每个用户的 AppData 三处 + 常用主目录，深度下钻。
     users_root = Path(src_disk + ":\\Users")
     if users_root.is_dir():
         try:
             for user in users_root.iterdir():
                 if user.name.casefold() in ("public", "default", "default user", "all users"):
                     continue
-                for sub in ("Downloads", "Documents", "Desktop", "Pictures", "Videos", "Music", "OneDrive"):
+                for sub in ("AppData/Local", "AppData/Roaming", "AppData/LocalLow"):
+                    units.extend(scan_folder(user / sub))
+                for sub in USER_APP_DIRS:
                     folder = user / sub
-                    try:
-                        if not folder.is_dir() or is_link(folder.lstat()):
-                            continue
-                        rows, _ = inspect_volume(src_disk, seconds, folder)
-                        size = sum(r["bytes"] for r in rows)
-                        if size >= USER_MIN:
-                            put(folder, size)
-                    except OSError:
-                        continue
+                    if folder.is_dir():
+                        units.extend(scan_folder(folder))
         except OSError as exc:
             notes.append(f"{src_disk} 盘用户目录枚举受限：{exc}")
 
-    for row in list(state["found"]):
-        if row["disk"] != src_disk or not row.get("directory") or row["bytes"] < FOLDER_MIN:
-            continue
-        kind, _ = classify_path(row["path"])
-        if kind == "system" and not any(seg in ("program files", "program files (x86)")
-                                        for seg in Path(row["path"]).parts):
-            continue
-        try:
-            rows, _ = inspect_volume(src_disk, seconds, Path(row["path"]))
-        except OSError:
-            continue
-        for child in rows:
-            if child["bytes"] < FOLDER_MIN:
-                continue
-            child_kind, _ = classify_path(child["path"])
-            if child_kind == "system":
-                continue
-            if kind == "system" and child_kind != "migrate-app":
-                continue
-            put(child["path"], child["bytes"])
+    # 3) Program Files / ProgramData：逐应用下钻，识别安装目录与缓存。
+    #    scan_folder 会把达到阈值的 migrate-app/cache 子目录登记为候选。
+    for top in ("Program Files", "Program Files (x86)", "ProgramData"):
+        root = Path(src_disk + ":\\") / top
+        if root.is_dir():
+            scan_folder(root)
 
-    for row, size in sorted(candidates.values(), key=lambda item: -item[1])[:12]:
+    # 4) 顶层的应用/用户/缓存目录也下钻细分（避免把整个 Program Files 当一项）。
+    for row in list(state["found"]):
+        if row["disk"] != src_disk or not row.get("directory"):
+            continue
+        kind, name = classify_path(row["path"])
+        if kind in ("migrate-app", "migrate-user", "cache"):
+            got = scan_folder(Path(row["path"]))
+            if not got:
+                # 下钻失败：以整体兜底计入，避免这部分空间消失
+                prefix = str(row["path"]).casefold().rstrip("\\") + "\\"
+                if prefix not in refined_done:
+                    units.append((row["path"], row["bytes"], kind, name))
+                    refined_done.add(prefix)
+
+    # 对第 1 步跳过的顶层目录，若其前缀从未成功细分，同样兜底。
+    for prefix in refined_prefixes:
+        if prefix in refined_done:
+            continue
+        for row in state["found"]:
+            if str(row["path"]).casefold().rstrip("\\") + "\\" == prefix:
+                kind, name = classify_path(row["path"])
+                units.append((row["path"], row["bytes"], kind, name))
+                break
+
+    build_composition(state, src_disk, units)
+
+    # 5) 缓存：只提示用应用内清理，绝不自动删除。
+    cache_rows = [(r, s, n) for r, s, k, n in candidates.values() if k == "cache"]
+    shown_cache = 0
+    for row, size, name in sorted(cache_rows, key=lambda item: -item[1]):
+        if shown_cache >= 8:
+            break
+        if row["id"] not in known:
+            state["found"].append(row)
+        state["proposals"].append({
+            "id": row["id"], "action": "app-clean", "estimate": size, "auto": True,
+            "recommendation": f"发现 {name}（约 {size / 1024**3:.2f} GiB）。建议在该应用内执行清理，或用系统磁盘清理处理。",
+            "impact": "缓存删除后应用首次运行会重建，可能变慢；本工具不会自动删除，请在应用内确认后操作。",
+            "target": "在对应应用的设置→存储/缓存中执行清理；浏览器可用其自带的清除浏览数据功能。",
+            "needAppReset": False,
+        })
+        shown_cache += 1
+
+    # 6) 可迁移项：需有空白盘承接，且空间足够。
+    migrate_rows = [(r, s, k, n) for r, s, k, n in candidates.values() if k in ("migrate-app", "migrate-user")]
+    for row, size, kind, name in sorted(migrate_rows, key=lambda item: -item[1])[:12]:
         dst, target = _migration_target(state, src_disk, row["path"])
         if not dst:
             notes.append(f"未找到可承接 {row['name']} 的空白盘，已跳过迁移建议。")
@@ -531,16 +686,14 @@ def auto_plan(state, seconds):
             continue
         if row["id"] not in known:
             state["found"].append(row)
-        kind, app = classify_path(row["path"])
+        app = name if kind == "migrate-app" else ""
         if kind == "migrate-app" and app:
             note = (f"这是 {app} 的数据或安装目录。搬迁后必须在该应用的设置里修改存储位置"
                     f"（如 WeGame/Steam 的存储位置、微信的文件管理路径），否则应用可能找不到数据。")
-            action = "migrate"
         else:
             note = "这是用户数据，搬迁通常无需改应用设置；路径已整体保留到目标盘。"
-            action = "migrate"
         state["proposals"].append({
-            "id": row["id"], "action": action, "estimate": size,
+            "id": row["id"], "action": "migrate", "estimate": size,
             "recommendation": f"把 {row['name']}（{size / 1024**3:.1f} GiB）从 {src_disk} 盘迁移到 {target['disk']} 盘的空白位置，腾出源盘空间。",
             "impact": note,
             "target": f"目标位置：{dst}（{target['disk']} 盘当前可用 {target['free'] / 1024**3:.1f} GiB）",

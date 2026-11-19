@@ -1,6 +1,6 @@
 ---
 name: disk-space-checkup-cleanup
-version: 1.2.2
+version: 1.3.0
 display_name: 全自动化系统电脑体检与清理
 display_name_en: Fully Automated System PC Checkup and Cleanup
 description: 在 Windows 上识别本机磁盘、排查空间占用、执行基础清理或生成可选择的深度清理 HTML，并复核各盘可用空间。用于“清理电脑”“C 盘快满了”“看看空间去哪了”等请求。
@@ -44,8 +44,10 @@ description_en: Identify local disks on Windows, analyze space usage, run basic 
 
 ## 深度清理
 
-1. 运行 `python cleanup.py deep --drives C D`。**默认 `--seconds 0` 即不限时完整遍历每个目标盘**，扫出所有顶层目录、根目录大文件、回收站，并对最紧张的盘自动下钻用户目录和大型目录，基础项自动执行。全盘扫描在文件多的机器上可能耗时数分钟，需耐心等待、不要中途停止；无权读取或未扫完的条目会标注。用户明确要求快速看看时可用 `scan` 或 `--seconds 30` 限制预算，但那属于抽样、不代表全盘。只读查看其它盘用 `scan`，收益按盘报告。
-2. **建议已由脚本自动生成，不要留空页面。** deep 完成时脚本已识别并写入 `run.json` 的 `proposals`：从最紧张盘迁移到最空盘的用户数据/游戏目录（含 `targetPath`、`targetDisk`）、虚拟内存与休眠文件、组件存储、回收站。读取本轮 `run.json`，逐条核对建议的合理性与目标盘剩余空间；对证据不足的大项可再用 `python cleanup.py drill --run <run.json> --id <目录ID>`（默认全量细分）核实应用归属，再用 `python cleanup.py recommend --run <run.json> --input <建议.json>` 补充 uninstall / app-clean / system 等建议（字段 `id`、`action`、`recommendation`、`impact`、`target`）。不要重复脚本已生成的条目。脚本生成的迁移建议带 `auto:true`，页面会标"自动识别"。
+1. 运行 `python cleanup.py deep --drives C D`。**默认 `--seconds 0` 即不限时完整遍历每个目标盘**，扫出所有顶层目录、根目录大文件、回收站，基础项自动执行。全盘扫描在文件多的机器上可能耗时数分钟，需耐心等待、不要中途停止；无权读取或未扫完的条目会标注。用户明确要求快速看看时可用 `scan` 或 `--seconds 30` 限制预算，但那属于抽样、不代表全盘。只读查看其它盘用 `scan`，收益按盘报告。
+
+   **深度下钻已内置**：脚本会对最紧张盘的每个用户账户自动下钻 `AppData\Local`、`AppData\Roaming`、`AppData\LocalLow`、用户主目录（下载/文档/桌面/微信文件/QQ 文件/.workbuddy 等）以及 `Program Files`、`Program Files (x86)`、`ProgramData`，逐应用识别，不再只停留在顶层目录。识别结果会写入 `run.json` 的 `composition`（占用构成），在页面顶部"空间去哪了"区块按「系统与保留 / 应用与游戏 / 用户文档 / 应用缓存与临时 / 其他」展示各占多少和代表目录——用它直接回答"C 盘一百多 G 到底去哪了"。当可迁移/可清理项合计明显小于磁盘已用空间时，要如实说明差额来自系统保留、被占用或权限受限目录，不要声称已经查全。
+2. **建议已由脚本自动生成，不要留空页面。** deep 完成时脚本已识别并写入 `run.json` 的 `proposals`：从最紧张盘迁移到最空盘的用户数据/应用/游戏目录（含 `targetPath`、`targetDisk`，已覆盖微信、QQ、WorkBuddy、Steam、浏览器、JetBrains、开发工具等常见应用，迁移后需在应用内改存储位置）、应用缓存与临时目录（`action=app-clean`，**只提示用应用内清理，脚本绝不自动删除**）、虚拟内存与休眠文件、组件存储、回收站。读取本轮 `run.json`，逐条核对建议的合理性与目标盘剩余空间；对证据不足的大项可再用 `python cleanup.py drill --run <run.json> --id <目录ID>`（默认全量细分）核实应用归属，再用 `python cleanup.py recommend --run <run.json> --input <建议.json>` 补充 uninstall / app-clean / system 等建议（字段 `id`、`action`、`recommendation`、`impact`、`target`）。不要重复脚本已生成的条目。脚本生成的迁移建议带 `auto:true`，页面会标"自动识别"。
 3. **应用数据目录的迁移提示是硬性要求**：若迁移对象属于已知应用（页面已标"迁移后需在应用设置里改存储位置"，impact 里写明应用名），在向用户说明时必须强调——搬迁完成后要到该应用的设置里修改存储/安装位置（如 WeGame/Steam 的存储位置、微信的文件管理路径），否则应用可能找不到数据。纯用户数据（下载、文档、视频）一般无需改设置。区分可自动处理与必须用户取舍的对象，核不清的如实标注，不臆测。
 4. 有深度决策项时，调用项目 MCP 的 open_review(run_id=本轮编号)，立即在原对话给出可点击的 page 链接，并调用 wait_review(handle)。每次返回等待状态时继续调用，保持当前任务；用户取消或超时后告知。handle 为任务私有参数，仅向用户展示 page。页面勾选的对象通过该工具返回。只要用户正在使用已有的有效深度轮次，就复用该轮并核实状态，不重复执行基础清理。收到后，先在同一对话逐项说明盘符、对象和动作，再用返回的 runFile 和 choiceFile 执行 `python cleanup.py apply --run <runFile> --input <choiceFile>`。不要自行重建或增补勾选清单。交互中断且未收到时不执行。
 

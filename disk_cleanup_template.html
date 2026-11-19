@@ -89,6 +89,20 @@ summary{width:fit-content;color:var(--blue);cursor:pointer;font-size:13px}
 .more-findings{margin:10px 18px}
 .more-findings .finding{padding-inline:0}
 .scan-coverage{margin:0 0 12px;padding:10px 14px;background:var(--soft);border-radius:8px}
+/* 占用构成：空间去哪了 */
+.composition{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:16px 18px;margin:0 0 16px}
+.composition h2{font-size:16px;display:flex;align-items:center;gap:8px}
+.composition h2 svg{width:18px;height:18px;color:var(--blue)}
+.comp-bar{display:flex;height:22px;border-radius:7px;overflow:hidden;margin:12px 0 14px;background:#eef2f8}
+.comp-bar span{display:block;height:100%;min-width:2px}
+.comp-legend{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:9px}
+.comp-item{display:flex;flex-direction:column;gap:2px;padding:9px 11px;border:1px solid var(--line);border-radius:9px;background:#fbfcfe}
+.comp-item .ci-top{display:flex;align-items:center;gap:7px;font-size:13px;font-weight:700}
+.comp-item .ci-dot{width:10px;height:10px;border-radius:3px;flex:none}
+.comp-item .ci-size{font-variant-numeric:tabular-nums;color:var(--ink)}
+.comp-item .ci-meta{font-size:11px;color:var(--muted)}
+.comp-item .ci-samples{font-size:11px;color:var(--muted);margin-top:3px;line-height:1.5}
+.comp-item .ci-samples b{color:#3d5068;font-weight:600}
 .result{padding:12px 18px}
 .result div{overflow-wrap:anywhere}
 .tools{display:flex;gap:10px;flex-wrap:wrap;margin:0 0 12px}
@@ -132,6 +146,7 @@ button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible,su
   <h1 id="title">深度清理</h1>
   <p id="subtitle"></p>
   <div class="summary" id="summary"></div>
+  <div id="composition-slot"></div>
   <nav id="tabs" aria-label="工作台视图">
     <button type="button" data-tab="decisions" aria-controls="decisions"><span class="tab-label">待你决定<span id="decision-dot" class="alert-dot" hidden></span></span></button>
     <button type="button" data-tab="findings" aria-controls="findings">全部发现</button>
@@ -264,6 +279,35 @@ function measurement(name, stage) {
       + signed(result.change) + '</strong></div>';
   }).join('') + '<small>' + escape(localTime(stage.before?.time)) + ' → '
   + escape(localTime(stage.after?.time)) + '</small></div>';
+}
+
+function renderComposition() {
+  const slot = get('composition-slot');
+  if (!slot) return;
+  const comp = run.composition;
+  if (!comp || !Array.isArray(comp.categories) || !comp.categories.length) { slot.innerHTML = ''; return; }
+  const palette = {system:'#7a8ba3', app:'#2054be', user:'#7a52c7', cache:'#d98a12', other:'#aab6c6'};
+  const cats = comp.categories.filter(c => c.bytes > 0);
+  const total = cats.reduce((s, c) => s + c.bytes, 0) || 1;
+  const bar = cats.map(c => '<span title="' + escape(c.label) + ' ' + size(c.bytes)
+    + '" style="width:' + (c.bytes / total * 100).toFixed(2) + '%;background:'
+    + (palette[c.key] || palette.other) + '"></span>').join('');
+  const cards = cats.map(c => {
+    const pct = (c.bytes / total * 100).toFixed(1);
+    const samples = (c.samples || []).slice(0, 3)
+      .map(s => '<b>' + escape(s.name) + '</b> ' + size(s.bytes)).join('<br>');
+    return '<div class="comp-item"><div class="ci-top"><span class="ci-dot" style="background:'
+      + (palette[c.key] || palette.other) + '"></span>' + escape(c.label) + '</div>'
+      + '<span class="ci-size">' + size(c.bytes) + ' · ' + pct + '%</span>'
+      + '<span class="ci-meta">' + c.items + ' 项</span>'
+      + (samples ? '<div class="ci-samples">' + samples + '</div>' : '') + '</div>';
+  }).join('');
+  const note = comp.note ? '<small style="color:var(--muted);display:block;margin-top:10px">'
+    + escape(comp.note) + '</small>' : '';
+  slot.innerHTML = '<section class="composition" aria-label="占用构成"><h2>'
+    + ICON.scan + '空间去哪了 · ' + escape(comp.disk) + ' 盘占用构成</h2>'
+    + '<div class="comp-bar" role="img" aria-label="各用途占用占比">' + bar + '</div>'
+    + '<div class="comp-legend">' + cards + '</div>' + note + '</section>';
 }
 
 function findings() {
@@ -481,6 +525,7 @@ if (!run) {
       ? '占用扫描 ' + escape(localTime(run.scanTime)) : '占用扫描')
       + (partial ? ' · ' + partial + ' 项只取得部分读数，列表已标注' : '') + '</small></div>';
   }
+  renderComposition();
   run.targets.forEach(disk => get('disk').add(new Option(disk + ' 盘', disk)));
   renderDecisions();
   findings();
