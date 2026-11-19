@@ -63,8 +63,8 @@ small{color:var(--muted)}
 .phase-pill{display:inline-flex;align-items:center;gap:6px;font-size:12px;padding:4px 11px;border-radius:999px;background:#eaf1fe;color:#2f6fdb;font-weight:700}
 .phase-pill.verified{background:#e6f5ec;color:#176c49}
 .phase-pill.wait{background:#fff2e4;color:#a55b12}
-.finish-btn{background:#176c49}
-.finish-btn:disabled{background:#dce3ec;color:#536279;cursor:default}
+header .finish-btn{background:#2fbf78;color:#06251a;font-size:12px;padding:7px 14px;border:none;border-radius:999px;font-weight:700}
+header .finish-btn:disabled{background:rgba(255,255,255,.16);color:#a9bdd6;cursor:default}
 /* 基础清理 / 深度清理 展示卡片 */
 .phase-head{display:flex;align-items:center;gap:10px;margin:20px 0 10px}
 .phase-head .phase-ico{width:30px;height:30px;border-radius:9px;display:grid;place-items:center;font-size:16px;flex:none}
@@ -162,7 +162,7 @@ button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible,su
 </head>
 <body>
 <header><div class="frame"><span class="wordmark">磁盘清理工作台</span>
-  <span style="display:flex;align-items:center;gap:14px"><span id="live-badge" hidden style="font-size:12px;color:#bfe8d2;background:rgba(255,255,255,.12);padding:3px 9px;border-radius:999px">● 已连接当前对话</span><a id="history" href="disk_cleanup_decision.legacy.html" hidden>查看旧版报告</a></span>
+  <span style="display:flex;align-items:center;gap:14px"><span id="live-badge" hidden style="font-size:12px;color:#bfe8d2;background:rgba(255,255,255,.12);padding:3px 9px;border-radius:999px">● 已连接当前对话</span><button type="button" id="finish-btn" class="finish-btn" hidden disabled>结束本轮清理并生成报告</button></span>
 </div></header>
 <main class="frame">
   <h1 id="title">深度清理</h1>
@@ -185,10 +185,7 @@ button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible,su
 </main>
 <footer class="bar" id="bar" hidden><div class="frame">
   <div><strong id="selection" aria-live="polite">尚未选择</strong><small id="export-status">选择将返回发起本轮任务的 WorkBuddy 对话。</small></div>
-  <div style="display:flex;gap:9px;align-items:center">
-    <button class="primary finish-btn" type="button" id="finish-btn" hidden disabled>结束本轮清理并生成报告</button>
-    <button class="primary" type="button" id="submit" disabled>交给 WorkBuddy 执行</button>
-  </div>
+  <button class="primary" type="button" id="submit" disabled>交给 WorkBuddy 执行</button>
 </div></footer>
 <div class="toast" id="toast" role="status" aria-live="polite" hidden><span class="toast-ico" id="toast-ico"></span><div><strong id="toast-title"></strong><p id="toast-message"></p></div><button type="button" id="toast-close" aria-label="关闭提示">×</button></div>
 <div class="dialog-mask" id="dialog-mask" hidden>
@@ -722,11 +719,8 @@ async function submitSelection() {
 if (!run) {
   get('title').textContent = '磁盘概况';
   get('tabs').hidden = true;
-  get('history').hidden = true;
   get('decisions').innerHTML = '<div class="panel empty">暂无排查数据。</div>';
 } else {
-  get('history').href = run.historyLink;
-  get('history').hidden = !run.archived;
   get('title').textContent = {basic:'基础清理结果',scan:'磁盘概况',deep:'深度清理'}[run.mode];
   const latest = run.deep?.reviews?.at(-1) ?? run.deep?.after ?? run.basic?.after ?? run.created;
   get('subtitle').textContent = '目标 ' + run.targets.join('、') + ' 盘 · 可用空间采样 ' + localTime(latest.time);

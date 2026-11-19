@@ -403,7 +403,7 @@ def dispatch(request):
     if method == "initialize":
         supported = ("2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05")
         return {"protocolVersion": params.get("protocolVersion") if params.get("protocolVersion") in supported else supported[0],
-                "capabilities":{"tools":{}}, "serverInfo":{"name":"disk-cleanup-review", "version":"1.4.0"}}
+                "capabilities":{"tools":{}}, "serverInfo":{"name":"disk-cleanup-review", "version":"1.4.1"}}
     if method == "ping":
         return {}
     if method == "tools/list":
