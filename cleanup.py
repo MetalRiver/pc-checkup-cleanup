@@ -497,24 +497,115 @@ def classify_path(path):
     return "skip", ""
 
 
-def _migration_target(state, source, path):
-    """在可用空间最大的空白盘上生成唯一目标路径。"""
-    rows = [r for r in disk_rows() if "free" in r and r["disk"] != source]
-    if not rows:
-        return None, None
-    target = max(rows, key=lambda r: r["free"])
+def make_target_path(source, target_disk, path):
+    """按源盘与源路径生成唯一目标路径。目标绝对路径只由脚本生成，不信任页面传入值。"""
     rel = Path(path)
     parts = [p for p in rel.parts[1:]]
-    name = ("_".join(parts) or rel.name or "data")[:120]
-    base = Path(target["disk"] + ":\\") / MIGRATION_ROOT / (source + "_" + name)
+    name = ("_".join(parts) or rel.name or "data")[:100]
+    base = Path(str(target_disk).upper() + ":\\") / MIGRATION_ROOT / (source.upper() + "_" + name)
     dst = base
     seq = 2
     while dst.exists():
         dst = Path(str(base) + f"_{seq}")
         seq += 1
         if seq > 50:
-            return None, None
-    return str(dst), target
+            raise ValueError("目标位置重复过多，无法生成唯一路径。")
+    return str(dst)
+
+
+def _migration_target(state, source, path):
+    """在可用空间最大的空白盘上生成唯一目标路径。"""
+    rows = [r for r in disk_rows() if "free" in r and r["disk"] != source]
+    if not rows:
+        return None, None
+    target = max(rows, key=lambda r: r["free"])
+    try:
+        return make_target_path(source, target["disk"], path), target
+    except ValueError:
+        return None, None
+
+
+def finalize_proposals(state):
+    """为每条建议生成后端权威的动作白名单与目标盘候选（幂等）。AI 只给建议，权限由此处决定。"""
+    disks = sorted(r["disk"] for r in disk_rows() if "free" in r)
+    rows = {r["id"]: r for r in state.get("found", [])}
+    for p in state.get("proposals", []):
+        action = p.get("action")
+        row = rows.get(p.get("id"), {})
+        if action == "migrate":
+            src = (row.get("disk") or "").upper()
+            targets = [d for d in disks if d != src]
+            p["targetDisks"] = targets
+            allowed = ["migrate"] if targets else []
+            # 应用数据可选用应用内存储管理（不自动删除）作为替代方案
+            if row.get("kind") == "migrate-app":
+                allowed.append("app-clean")
+        elif action in ("app-clean", "uninstall", "system", "read-space", "recycle", "recycle-review"):
+            allowed = [action]
+        else:
+            allowed = []
+        if "skip" not in allowed:
+            allowed.append("skip")
+        p["allowedActions"] = allowed
+        p["recommendedAction"] = action
+        p["recommendedTargetDisk"] = p.get("targetDisk") or (
+            p["targetDisks"][0] if p.get("targetDisks") else None)
+
+
+def decisions_digest(decisions):
+    return hashlib.sha256(json.dumps(decisions, sort_keys=True).encode()).hexdigest()
+
+
+def validate_decisions(state, decisions):
+    """校验并规范化用户决策。返回非跳过项 [{id, action, targetDisk?, targetPath?}]。"""
+    props = {p["id"]: p for p in state.get("proposals", [])}
+    rows = {r["id"]: r for r in state.get("found", [])}
+    free = {r["disk"]: r["free"] for r in disk_rows() if "free" in r}
+    if not isinstance(decisions, list) or not decisions or len(decisions) > len(props):
+        raise ValueError("决策列表无效。")
+    out, seen, targets = [], set(), []
+    need_by_disk = {}
+    for item in decisions:
+        if not isinstance(item, dict):
+            raise ValueError("决策项格式无效。")
+        pid = item.get("id")
+        if pid in seen or pid not in props or pid not in rows:
+            raise ValueError("决策项不属于本轮建议，或重复。")
+        seen.add(pid)
+        prop, row = props[pid], rows[pid]
+        action = item.get("action")
+        allowed = prop.get("allowedActions") or [prop.get("action"), "skip"]
+        if action not in allowed:
+            raise ValueError(f"{row.get('name')} 不支持该处理方式。")
+        if action == "skip":
+            continue
+        normalized = {"id": pid, "action": action}
+        if action == "migrate":
+            src = (row.get("disk") or "").upper()
+            target = str(item.get("targetDisk") or "").upper()
+            if (target not in (prop.get("targetDisks") or []) or target == src
+                    or target not in free):
+                raise ValueError(f"{row.get('name')} 的目标盘无效。")
+            need_by_disk[target] = need_by_disk.get(target, 0) + (row.get("bytes") or 0)
+            # 目标绝对路径由脚本重新生成，绝不采用页面值
+            destination = make_target_path(src, target, row["path"])
+            src_path = Path(row["path"])
+            dst_path = Path(destination)
+            if (dst_path == src_path or dst_path in src_path.parents
+                    or src_path in dst_path.parents):
+                raise ValueError(f"{row.get('name')} 的源与目标重叠，未通过校验。")
+            for other in targets:
+                o = Path(other)
+                if dst_path == o or dst_path in o.parents or o in dst_path.parents:
+                    raise ValueError("本轮有多个迁移目标重叠，请调整目标盘后重试。")
+            targets.append(destination)
+            normalized["targetDisk"] = target
+            normalized["targetPath"] = destination
+        out.append(normalized)
+    for disk, need in need_by_disk.items():
+        if free.get(disk, 0) < need:
+            raise ValueError(f"{disk} 盘可用空间不足以承接本轮全部迁移，请分散目标盘或减少勾选。")
+    return out
 
 
 def build_composition(state, src_disk, units):
@@ -753,6 +844,8 @@ def write_page(path, template, state, history_link):
 
 def emit(run_dir, state, *, publish=False):
     state["archived"] = (BASE / "disk_cleanup_decision.legacy.html").is_file()
+    if state.get("mode") == "deep" and "deep" not in state:
+        finalize_proposals(state)
     dump(run_dir / "run.json", state)
     template = (BASE / "disk_cleanup_template.html").read_text(encoding="utf-8-sig")
     write_page(run_dir / "disk_cleanup_decision.html", template, state,
@@ -867,20 +960,38 @@ def apply_selection(directory, state, source):
     expected = hashlib.sha256(json.dumps(fields, sort_keys=True).encode()).hexdigest()
     if choice.get("reviewDigest") != expected:
         raise ValueError("回执缺少或校验值不匹配，请从原对话重新打开本轮工作台。")
-    choices = choice.get("ids")
     if "deep" in state or state["mode"] != "deep":
         raise ValueError("该次深度选择已经提交，或任务类型不符。")
-    if (choice.get("runId") != state["runId"] or choice.get("revision") != state["revision"]
-            or not isinstance(choices, list) or not choices or len(set(choices)) != len(choices)):
+    if choice.get("runId") != state["runId"] or choice.get("revision") != state["revision"]:
         raise ValueError("所选方案版本或条目无效，请打开本轮最新页面。")
+
     proposals = {p["id"]: p for p in state["proposals"]}
     rows = {row["id"]: row for row in state["found"]}
-    if not set(choices) <= proposals.keys():
-        raise ValueError("所选编号不在本轮建议中，请打开本轮最新页面。")
-    planned = [(proposals[key], rows[key]) for key in choices]
-    targets = [(Path(row["path"]), row.get("name") or row["path"]) for _, row in planned]
-    for i, (a, name_a) in enumerate(targets):
-        for b, name_b in targets[i + 1:]:
+    # 新协议：decisions 含用户最终动作/目标盘；旧协议：ids 沿用建议预置动作。
+    if "decisions" in choice:
+        decisions = choice["decisions"]
+        if choice.get("decisionDigest") != decisions_digest(decisions):
+            raise ValueError("决策校验值不匹配，请从原对话重新打开本轮工作台。")
+        if not isinstance(decisions, list) or not decisions or len(decisions) != len(set(
+                d.get("id") for d in decisions if isinstance(d, dict))):
+            raise ValueError("决策条目无效或重复。")
+        validated = validate_decisions(state, decisions)
+        ids = [d["id"] for d in decisions if isinstance(d, dict) and d.get("action") != "skip"]
+    else:
+        ids = choice.get("ids")
+        if (not isinstance(ids, list) or not ids or len(set(ids)) != len(ids)
+                or not set(ids) <= proposals.keys()):
+            raise ValueError("所选编号不在本轮建议中，请打开本轮最新页面。")
+        # 旧协议用建议预置动作；同样经过白名单与目标盘校验，确保安全不降级。
+        legacy = [{"id": key, "action": proposals[key]["action"],
+                   **({"targetDisk": proposals[key]["targetDisk"]}
+                      if proposals[key].get("targetDisk") else {})} for key in ids]
+        validated = validate_decisions(state, legacy)
+
+    planned = [(proposals[d["id"]], rows[d["id"]], d) for d in validated]
+    plans = [(Path(rows[key]["path"]), rows[key].get("name") or rows[key]["path"]) for key in ids]
+    for i, (a, name_a) in enumerate(plans):
+        for b, name_b in plans[i + 1:]:
             if a == b or a in b.parents or b in a.parents:
                 raise ValueError(
                     f"本轮选择含重叠目标：{name_a}（{a}）与 {name_b}（{b}）"
@@ -888,8 +999,8 @@ def apply_selection(directory, state, source):
                 )
     before = sample(state["targets"])
     entries = []
-    for proposal, row in planned:
-        action = proposal["action"]
+    for proposal, row, decision in planned:
+        action = decision["action"]
         entry = {"id": row["id"], "name": row["name"], "disk": row["disk"], "action": action}
         if action == "recycle":
             try:
@@ -904,16 +1015,19 @@ def apply_selection(directory, state, source):
                 entry.update(status="未确认完成", note=str(exc))
         elif action == "migrate":
             try:
-                moved = migrate_target(state, row, proposal)
+                effective = {**proposal, "targetPath": decision["targetPath"],
+                             "targetDisk": decision["targetDisk"]}
+                moved = migrate_target(state, row, effective)
                 entry.update(status="完成", note=f"已迁移到 {moved}。" + proposal.get("impact", ""))
             except (OSError, ValueError, subprocess.SubprocessError) as exc:
                 entry.update(status="未确认完成", note=str(exc))
         else:
             entry.update(status="待 WorkBuddy 打开指定入口", note=proposal["target"])
         entries.append(entry)
-    deep = {"before": before, "selected": choices, "entries": entries,
+    deep = {"before": before, "selected": ids, "entries": entries,
             "after": sample(state["targets"])}
     state["deep"] = deep
+    state["decisions"] = choice.get("decisions")
     emit(directory, state)
 
 

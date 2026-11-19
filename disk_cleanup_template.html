@@ -45,6 +45,26 @@ small{color:var(--muted)}
 .catbar button svg{width:15px;height:15px;vertical-align:-3px}
 .chip.act svg{width:12px;height:12px;vertical-align:-2px;margin-right:2px}
 .cat-empty{padding:18px;text-align:center;color:var(--muted)}
+/* 决策控件：动作 / 目标盘 / 批量工具条 */
+.row>.decision-controls{display:flex;gap:14px;flex-wrap:wrap;align-items:center;margin:0 18px 12px;padding-top:2px}
+.decision-controls label{font-size:12px;color:var(--muted);display:inline-flex;align-items:center;gap:5px}
+.decision-controls select{font-size:12px;padding:4px 8px;border:1px solid var(--line);border-radius:7px;background:var(--surface);max-width:180px}
+.decision-controls select:disabled{background:#f1f4f9;color:#8492a6}
+.batchbar{display:flex;gap:8px;flex-wrap:wrap;align-items:center;background:#f6f9fe;border:1px solid #dce7f7;border-radius:10px;padding:10px 13px;margin:10px 0 4px;font-size:12px;color:var(--muted)}
+.batchbar b{color:var(--ink)}
+.batchbar select{font-size:12px;padding:4px 8px;border:1px solid var(--line);border-radius:7px;background:var(--surface)}
+.batchbar button{font-size:12px;padding:5px 11px;border:1px solid #9db8e8;color:var(--blue);background:#fff;border-radius:7px}
+.batchbar button:hover{background:var(--soft)}
+.batchbar .batch-scope{font-weight:700;color:var(--blue)}
+.remaining{margin-top:10px;background:#fff8ec;border:1px solid #f0d9b0;border-radius:10px;padding:11px 14px;font-size:13px}
+.remaining b{color:#8a4a18}
+.remaining ul{margin:7px 0 0;padding-left:18px;color:var(--muted)}
+.remaining li{margin:3px 0;overflow-wrap:anywhere}
+.phase-pill{display:inline-flex;align-items:center;gap:6px;font-size:12px;padding:4px 11px;border-radius:999px;background:#eaf1fe;color:#2f6fdb;font-weight:700}
+.phase-pill.verified{background:#e6f5ec;color:#176c49}
+.phase-pill.wait{background:#fff2e4;color:#a55b12}
+.finish-btn{background:#176c49}
+.finish-btn:disabled{background:#dce3ec;color:#536279;cursor:default}
 /* 基础清理 / 深度清理 展示卡片 */
 .phase-head{display:flex;align-items:center;gap:10px;margin:20px 0 10px}
 .phase-head .phase-ico{width:30px;height:30px;border-radius:9px;display:grid;place-items:center;font-size:16px;flex:none}
@@ -141,10 +161,13 @@ button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible,su
 </style>
 </head>
 <body>
-<header><div class="frame"><span class="wordmark">磁盘清理工作台</span><a id="history" href="disk_cleanup_decision.legacy.html">查看旧版报告</a></div></header>
+<header><div class="frame"><span class="wordmark">磁盘清理工作台</span>
+  <span style="display:flex;align-items:center;gap:14px"><span id="live-badge" hidden style="font-size:12px;color:#bfe8d2;background:rgba(255,255,255,.12);padding:3px 9px;border-radius:999px">● 已连接当前对话</span><a id="history" href="disk_cleanup_decision.legacy.html" hidden>查看旧版报告</a></span>
+</div></header>
 <main class="frame">
   <h1 id="title">深度清理</h1>
   <p id="subtitle"></p>
+  <div><span class="phase-pill" id="phase-pill" hidden>等待勾选</span></div>
   <div class="summary" id="summary"></div>
   <div id="composition-slot"></div>
   <nav id="tabs" aria-label="工作台视图">
@@ -162,7 +185,10 @@ button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible,su
 </main>
 <footer class="bar" id="bar" hidden><div class="frame">
   <div><strong id="selection" aria-live="polite">尚未选择</strong><small id="export-status">选择将返回发起本轮任务的 WorkBuddy 对话。</small></div>
-  <button class="primary" type="button" id="submit" disabled>交给 WorkBuddy 执行</button>
+  <div style="display:flex;gap:9px;align-items:center">
+    <button class="primary finish-btn" type="button" id="finish-btn" hidden disabled>结束本轮清理并生成报告</button>
+    <button class="primary" type="button" id="submit" disabled>交给 WorkBuddy 执行</button>
+  </div>
 </div></footer>
 <div class="toast" id="toast" role="status" aria-live="polite" hidden><span class="toast-ico" id="toast-ico"></span><div><strong id="toast-title"></strong><p id="toast-message"></p></div><button type="button" id="toast-close" aria-label="关闭提示">×</button></div>
 <div class="dialog-mask" id="dialog-mask" hidden>
@@ -251,9 +277,33 @@ const CATEGORIES = [
 const categoryOf = action => (CATEGORIES.find(c => c.actions.includes(action)) || {key:'other'}).key;
 let activeCategory = 'all';
 const selectedIds = new Set();
+// 每项用户的最终决策：{action, targetDisk}；缺省取 AI 建议
+const decisions = new Map();
 let locked = false;
 let run;
 try { run = JSON.parse(get('run').textContent); } catch { run = null; }
+
+const proposalById = id => (run?.proposals || []).find(p => p.id === id);
+function allowedActions(p) {
+  return p.allowedActions || [p.action, 'skip'];
+}
+function decisionOf(id) {
+  const p = proposalById(id);
+  if (!p) return {action: 'skip'};
+  if (!decisions.has(id)) decisions.set(id, {
+    action: p.recommendedAction || p.action,
+    targetDisk: p.recommendedTargetDisk || (p.targetDisks?.[0] || null)
+  });
+  return decisions.get(id);
+}
+function setDecision(id, patch) {
+  const cur = {...decisionOf(id), ...patch};
+  decisions.set(id, cur);
+  // 动作为 skip 视为不处理，取消勾选
+  if (cur.action === 'skip') selectedIds.delete(id); else selectedIds.add(id);
+  paintDecisionRows(new Map((run.found || []).map(r => [r.id, r])));
+  selectionSummary();
+}
 
 function tab(id) {
   for (const button of document.querySelectorAll('[data-tab]')) {
@@ -261,7 +311,9 @@ function tab(id) {
     get(button.dataset.tab).hidden = !selected;
     button.setAttribute('aria-selected', String(selected));
   }
-  get('bar').hidden = id !== 'decisions' || !run.proposals.length || Boolean(run.deep);
+  // 提交后（run.deep 或 submitted）在所有页签都保留底栏，便于随时点结束按钮。
+  get('bar').hidden = (!submitted && !run.deep) ? (id !== 'decisions' || !run.proposals.length) : false;
+  if (run.deep) { const s = get('submit'); if (s) s.hidden = true; }
 }
 
 function delta(before, after, disk) {
@@ -366,8 +418,24 @@ function renderDecisions() {
         + (activeCategory === c.key) + '">' + c.icon + c.label
         + '<span class="badge">' + counts[c.key] + '</span></button>').join('')
     + '</div>';
-  get('decisions').innerHTML = '<p>按类型勾选你愿意处理的项目，一次提交。共 <b>' + counts.all + '</b> 项待决定。</p>'
-    + catbar + '<div id="decision-rows"></div>';
+  // 初始化每项默认决策（不覆盖用户已有选择）
+  run.proposals.forEach(p => decisionOf(p.id));
+  const batchbar = '<div class="batchbar"><span class="batch-scope">批量设置</span>'
+    + '<label>范围 <select id="batch-scope"><option value="category">当前分类</option>'
+    + '<option value="selected">已勾选</option><option value="all">全部项目</option></select></label>'
+    + '<label>动作 <select id="batch-action"><option value="">— 不改 —</option>'
+    + '<option value="migrate">搬迁</option><option value="app-clean">应用内清理</option>'
+    + '<option value="skip">跳过</option></select></label>'
+    + '<label>目标盘 <select id="batch-disk"><option value="">— 不改 —</option>'
+    + (() => {
+        const disks = new Set();
+        run.proposals.forEach(p => (p.targetDisks || []).forEach(d => disks.add(d)));
+        return [...disks].sort().map(d => '<option value="' + d + '">' + d + ' 盘</option>').join('');
+      })()
+    + '</select></label><button type="button" id="batch-apply">应用</button>'
+    + '<button type="button" id="batch-clear">全部取消</button></div>';
+  get('decisions').innerHTML = '<p>逐项决定处理方式，或用批量工具一次设置；未勾选的项目本轮不处理。共 <b>' + counts.all + '</b> 项待决定。</p>'
+    + catbar + batchbar + '<div id="decision-rows"></div>';
   paintDecisionRows(rows);
   get('decisions').querySelectorAll('[data-cat]').forEach(button => {
     button.addEventListener('click', () => {
@@ -377,6 +445,61 @@ function renderDecisions() {
       paintDecisionRows(rows);
     });
   });
+  bindDecisionControls(rows);
+  get('batch-apply').addEventListener('click', () => applyBatch(rows));
+  get('batch-clear').addEventListener('click', () => {
+    selectedIds.clear();
+    run.proposals.forEach(p => decisions.set(p.id, {action: 'skip', targetDisk: null}));
+    paintDecisionRows(rows); selectionSummary();
+  });
+}
+
+function bindDecisionControls(rows) {
+  get('decision-rows').querySelectorAll('[data-act]').forEach(sel => sel.addEventListener('change', () => {
+    const id = sel.dataset.act;
+    const disk = get('decision-rows').querySelector('[data-disk="' + CSS.escape(id) + '"]');
+    setDecision(id, {action: sel.value, targetDisk: disk ? disk.value : decisionOf(id).targetDisk});
+  }));
+  get('decision-rows').querySelectorAll('[data-disk]').forEach(sel => sel.addEventListener('change', () => {
+    setDecision(sel.dataset.disk, {targetDisk: sel.value});
+  }));
+  get('decision-rows').querySelectorAll('input[type=checkbox]').forEach(input => {
+    input.addEventListener('change', () => {
+      if (input.checked) selectedIds.add(input.value); else selectedIds.delete(input.value);
+      selectionSummary();
+    });
+  });
+}
+
+function visibleProposalIds() {
+  return run.proposals.filter(p => activeCategory === 'all' || categoryOf(p.action) === activeCategory)
+    .map(p => p.id);
+}
+
+function applyBatch(rows) {
+  const scope = get('batch-scope').value;
+  const action = get('batch-action').value;
+  const disk = get('batch-disk').value;
+  if (!action && !disk) { notify('warn', '未选择批量项', '请先选择要设置的动作或目标盘。'); return; }
+  let ids = scope === 'all' ? run.proposals.map(p => p.id)
+    : scope === 'selected' ? [...selectedIds] : visibleProposalIds();
+  if (!ids.length) { notify('warn', '范围内没有项目', '当前范围没有可设置的项目。'); return; }
+  let changed = 0;
+  ids.forEach(id => {
+    const p = proposalById(id);
+    if (!p) return;
+    const cur = {...decisionOf(id)};
+    if (action) {
+      if (!allowedActions(p).includes(action)) return;  // 白名单约束，越权直接忽略
+      cur.action = action;
+      if (action === 'skip') selectedIds.delete(id); else selectedIds.add(id);
+    }
+    if (disk && (p.targetDisks || []).includes(disk)) cur.targetDisk = disk;
+    decisions.set(id, cur);
+    changed++;
+  });
+  paintDecisionRows(rows); selectionSummary();
+  notify('ok', '批量设置完成', '已更新 ' + changed + ' 项' + (ids.length > changed ? '（' + (ids.length - changed) + ' 项因处理方式不允许已跳过）' : '') + '。');
 }
 
 function paintDecisionRows(rows) {
@@ -386,9 +509,10 @@ function paintDecisionRows(rows) {
     return;
   }
   get('decision-rows').innerHTML = '<div class="panel">'
-    + '<div class="table-head"><span>对象</span><span>AI 建议</span><span>预计收益</span><span>本轮选择</span></div>'
+    + '<div class="table-head"><span>对象</span><span>AI 建议 / 你的决定</span><span>预计收益</span><span>本轮选择</span></div>'
     + list.map(p => {
       const row = rows.get(p.id);
+      const dec = decisionOf(p.id);
       const preview = p.action === 'recycle'
         ? '<p>在资源管理器打开回收站，按“原位置”核对 ' + row.disk + ' 盘的文件。</p>' : '';
       const autoTag = p.auto ? '<span class="auto-tag">自动识别</span>' : '';
@@ -396,6 +520,19 @@ function paintDecisionRows(rows) {
         ? '<div><span class="app-tag">迁移后需在应用设置里改存储位置</span></div>' : '';
       const cat = CATEGORIES.find(c => c.key === categoryOf(p.action));
       const catTag = '<span class="chip act">' + (cat ? cat.icon + cat.label : escape(actionName[p.action])) + '</span> ';
+      // 动作下拉：仅在后端给定的白名单内可选
+      const acts = allowedActions(p).map(a =>
+        '<option value="' + a + '"' + (a === dec.action ? ' selected' : '') + '>' + escape(actionName[a] || a) + '</option>').join('');
+      const actionSel = '<div class="decision-controls"><label>你的决定 <select data-act="' + escape(p.id) + '"'
+        + (locked ? ' disabled' : '') + '>' + acts + '</select></label>';
+      // 目标盘下拉：仅 migrate 且白名单给出候选时显示
+      let diskSel = '';
+      if (dec.action === 'migrate' && Array.isArray(p.targetDisks) && p.targetDisks.length) {
+        const opts = p.targetDisks.map(d =>
+          '<option value="' + d + '"' + (d === dec.targetDisk ? ' selected' : '') + '>' + d + ' 盘</option>').join('');
+        diskSel = '<label>搬到 <select data-disk="' + escape(p.id) + '"' + (locked ? ' disabled' : '')
+          + '>' + opts + '</select></label>';
+      }
       return '<article class="row"><div class="decision-main"><div><div class="name">' + row.disk
         + ' 盘 · ' + escape(row.name) + '</div><small>' + (row.pending || row.errors ? '已读取部分 ' : '当前记录 ') + size(row.bytes) + '</small></div>'
         + '<div class="description"><b>' + catTag + autoTag + escape(actionName[p.action]) + '</b>' + appTag + '<p>'
@@ -404,6 +541,7 @@ function paintDecisionRows(rows) {
         + '<label class="checkbox"><input type="checkbox" value="' + escape(p.id) + '"'
         + (selectedIds.has(p.id) ? ' checked' : '') + (locked ? ' disabled' : '')
         + ' aria-label="选中 ' + row.disk + ' 盘 ' + escape(row.name) + '">选中</label></div>'
+        + (actionSel + diskSel + '</div>')
         + '<details><summary>查看路径与处理方式</summary><div class="detail"><p>' + escape(row.path)
         + '</p>' + (p.target ? '<p>' + escape(p.target) + '</p>' : '') + preview + '</div></details></article>';
     }).join('') + '</div>';
@@ -418,12 +556,18 @@ function selectionSummary() {
   const known = chosen.filter(item => Number.isFinite(item.estimate));
   const unknown = chosen.length - known.length;
   const estimates = known.length ? ' · 已估算 ' + size(known.reduce((sum, item) => sum + item.estimate, 0)) : '';
-  const disks = [...new Set(chosen.map(item => run.found.find(row => row.id === item.id).disk))].join('、');
+  const mix = {};
+  chosen.forEach(item => {
+    const d = decisionOf(item.id);
+    const key = d.action === 'migrate' ? ('搬迁→' + (d.targetDisk || '?')) : (actionName[d.action] || d.action);
+    mix[key] = (mix[key] || 0) + 1;
+  });
+  const mixText = Object.keys(mix).length ? ' · ' + Object.entries(mix).map(([k, v]) => k + ' ' + v).join('，') : '';
   get('selection').textContent = chosen.length
-    ? '已选 ' + chosen.length + ' 项 · ' + disks + ' 盘' + estimates + (unknown ? ' · ' + unknown + ' 项待测' : '')
+    ? '已选 ' + chosen.length + ' 项' + estimates + mixText + (unknown ? ' · ' + unknown + ' 项待测' : '')
     : '尚未选择';
-  get('submit').disabled = !chosen.length;
-  get('export-status').textContent = '选择将返回发起本轮任务的 WorkBuddy 对话。';
+  get('submit').disabled = !chosen.length || locked;
+  if (!submitted) get('export-status').textContent = '提交后工作台会保持在线，执行完成再点「结束本轮清理」。';
 }
 
 let sending = false;
@@ -431,30 +575,106 @@ let submitted = false;
 function lockSelection(lock) {
   locked = lock;
   get('decisions').querySelectorAll('input[type=checkbox]').forEach(input => input.disabled = lock);
+  get('decision-rows').querySelectorAll('select').forEach(sel => sel.disabled = lock);
+  const batch = get('batch-apply');
+  if (batch) { batch.disabled = lock; const clear = get('batch-clear'); if (clear) clear.disabled = lock; }
   get('submit').disabled = lock || !selected().length;
 }
+function updateFinishButton(data) {
+  const btn = get('finish-btn');
+  if (!btn) return;
+  if (data.phase === 'finished' || data.finished) {
+    btn.hidden = false; btn.disabled = true; btn.textContent = '本轮已结束'; return;
+  }
+  if (data.reviewed || data.canFinish) {
+    btn.hidden = false; btn.disabled = false; btn.textContent = '结束本轮清理并生成报告';
+  } else if (data.submitted) {
+    btn.hidden = false; btn.disabled = true; btn.textContent = '执行完成后可结束';
+  }
+}
+
+function showRemaining(data) {
+  let box = get('remaining-box');
+  const list = data.unselected || [];
+  if (!list.length) { if (box) box.remove(); return; }
+  if (!box) {
+    box = document.createElement('div'); box.id = 'remaining-box'; box.className = 'remaining';
+    get('decisions').appendChild(box);
+  }
+  const rows = new Map((run.found || []).map(r => [r.id, r]));
+  box.innerHTML = '<b>本轮未处理 ' + list.length + ' 项</b>'
+    + '<div style="margin-top:4px">这些项目本轮未勾选或已跳过，保留到下一轮处理。</div>'
+    + '<ul>' + list.map(p => {
+        const row = rows.get(p.id);
+        return '<li>' + escape(row?.name || p.name) + (row ? '（' + row.disk + ' 盘）' : '') + '</li>';
+      }).join('') + '</ul>';
+}
+
+function updateVolumes(data) {
+  if (!Array.isArray(data.volumes)) return;
+  const summary = get('summary');
+  if (!summary) return;
+  summary.innerHTML = data.volumes.map(row => {
+    const used = Number.isFinite(row.total) && row.total > 0
+      ? Math.round(Math.max(0, Math.min(100, (1 - row.free / row.total) * 100))) : null;
+    const bar = used === null ? '' : '<div class="capacity-bar"><span style="width:' + used + '%"></span></div>';
+    return '<div class="metric"><small>' + row.disk + ' 盘当前可用</small><strong>' + size(row.free)
+      + '</strong>' + bar + '<small>总容量 ' + size(row.total) + (used === null ? '' : ' · 已用 ' + used + '%') + '</small></div>';
+  }).join('');
+}
+
 async function readStatus() {
   try {
     const response = await fetch('status', {cache:'no-store'});
     const data = await response.json();
     if (!response.ok) throw new Error(data.error || '连接失效');
-    if (data.reviewed) {
-      if (!run.deep) location.reload();
-      return;
+    const phase = get('phase-pill');
+    if (phase) {
+      phase.hidden = false;
+      phase.className = 'phase-pill ' + (data.phase === 'verified' || data.finished ? 'verified'
+        : data.phase === 'applying' || data.phase === 'awaiting_manual' ? 'wait' : '');
+      phase.textContent = ({awaiting_selection:'等待勾选', applying:'执行中', verified:'已复核完成',
+        awaiting_manual:'待人工处理', finished:'已结束', done:'已完成'})[data.phase] || data.phase;
     }
-    if (data.submitted) {
+    updateVolumes(data);
+    if (data.submitted && !submitted) {
       submitted = true;
       selectedIds.clear();
       data.ids.forEach(id => selectedIds.add(id));
       get('decisions').querySelectorAll('input[type=checkbox]').forEach(input => input.checked = selectedIds.has(input.value));
-      selectionSummary();
-      lockSelection(true);
-      get('export-status').textContent = data.message;
+      selectionSummary(); lockSelection(true);
     }
-    if (!data.finished) setTimeout(readStatus, 2000);
+    if (data.reviewed && !run.deep) { location.reload(); return; }
+    if (data.submitted) {
+      get('export-status').textContent = data.message || '';
+      showRemaining(data);
+      updateFinishButton(data);
+    }
+    if (data.finished) {
+      notify('ok', '本轮已结束', '成果报告已生成，请查看执行记录或在原对话领取报告链接。');
+      return;
+    }
+    setTimeout(readStatus, 2000);
   } catch {
     get('export-status').textContent = '连接中断。请回到原对话查看回执或重新打开本轮工作台。';
     if (get('dialog-mask').hidden) notify('err', '工作台连接中断', '实时状态读取失败。请回到原对话查看回执，或重新打开本轮工作台后再提交。');
+  }
+}
+
+async function finishRound() {
+  const btn = get('finish-btn');
+  if (!btn || btn.disabled) return;
+  btn.disabled = true;
+  try {
+    const response = await fetch('finish', {method:'POST', headers:{'Content-Type':'application/json'}, body:'{}'});
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || '结束失败');
+    btn.textContent = '已通知 WorkBuddy';
+    notify('ok', '已结束本轮清理', '成果报告已生成，WorkBuddy 正在整理最终结果。');
+    get('export-status').textContent = '本轮已结束，请在原对话查看成果报告。';
+  } catch (error) {
+    btn.disabled = false;
+    notify('err', '结束失败', error.message);
   }
 }
 async function submitSelection() {
@@ -471,14 +691,17 @@ async function submitSelection() {
     get('export-status').textContent = '已阻止提交：存在重叠目标。';
     return;
   }
-  const payload = JSON.stringify({runId:run.runId, revision:run.revision, ids});
-  if (!run.liveReview) {
-    const form = document.createElement('form');
-    form.method = 'POST';
-    form.action = new URL('submit', run.reviewUrl).href;
-    const field = document.createElement('input');
-    field.type = 'hidden'; field.name = 'selection'; field.value = payload;
-    form.append(field); document.body.append(form); form.submit(); return;
+  // 每项勾选带上用户的最终动作与目标盘；decisionDigest 由服务端生成，前端不伪造。
+  const decisions = ids.map(id => {
+    const d = decisionOf(id);
+    const item = {id, action: d.action};
+    if (d.action === 'migrate' && d.targetDisk) item.targetDisk = d.targetDisk;
+    return item;
+  });
+  const payload = JSON.stringify({runId:run.runId, revision:run.revision, ids, decisions});
+  if (!run.liveReview && !run.reviewUrl) {
+    notify('warn', '这是历史快照', '静态快照不能提交。请回到发起本轮任务的 WorkBuddy 对话，重新打开实时工作台。');
+    return;
   }
   sending = true;
   lockSelection(true);
@@ -571,17 +794,12 @@ if (!run) {
     + '</div>';
   get('search').addEventListener('input', findings);
   get('disk').addEventListener('change', findings);
-  get('decisions').addEventListener('change', event => {
-    const input = event.target;
-    if (!input.matches('input[type=checkbox]')) return;
-    if (input.checked) selectedIds.add(input.value); else selectedIds.delete(input.value);
-    selectionSummary();
-  });
   get('submit').addEventListener('click', submitSelection);
+  get('finish-btn').addEventListener('click', finishRound);
   get('toast-close').addEventListener('click', () => { get('toast').hidden = true; });
   get('dialog-ok').addEventListener('click', closeDialog);
   get('dialog-mask').addEventListener('click', event => { if (event.target === get('dialog-mask')) closeDialog(); });
-  if (run.liveReview) readStatus();
+  if (run.liveReview) { get('live-badge').hidden = false; readStatus(); }
   if (!run.liveReview && !run.reviewUrl && run.mode === 'deep' && !run.deep) {
     lockSelection(true);
     get('submit').textContent = '等待原对话连接';
