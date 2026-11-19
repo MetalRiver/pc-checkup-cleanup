@@ -187,14 +187,15 @@ def add_entry(drive, path, info):
 
 
 def inspect_volume(drive, seconds, root=None):
+    """扫描一个卷。seconds<=0 表示不限时，完整遍历到结束（真·全盘扫描）。"""
     rows, queue, warnings = [], deque(), []
     identities = set()
-    deadline = time.monotonic() + seconds
+    deadline = time.monotonic() + seconds if seconds and seconds > 0 else None
     try:
         root = root or Path(drive + ":\\")
         ordinary_path(root)
         for path in root.iterdir():
-            if time.monotonic() >= deadline:
+            if deadline and time.monotonic() >= deadline:
                 warnings.append("根目录项过多，已按扫描预算停止列举。")
                 break
             try:
@@ -217,14 +218,14 @@ def inspect_volume(drive, seconds, root=None):
                 warnings.append(f"{path}：{exc}")
     except OSError as exc:
         warnings.append(str(exc))
-    while queue and time.monotonic() < deadline:
+    while queue and (deadline is None or time.monotonic() < deadline):
         row, pending = queue.popleft()
         path = pending.popleft()
         try:
             ordinary_path(path)
             with os.scandir(path) as entries:
                 for entry in entries:
-                    if time.monotonic() >= deadline:
+                    if deadline and time.monotonic() >= deadline:
                         row["interrupted"] = True
                         break
                     try:
@@ -381,6 +382,212 @@ def deep_scan(disks, seconds):
     return sorted(found, key=lambda row: (row["disk"], -row["bytes"])), proposed, warnings
 
 
+SYSTEM_TOP = {"windows", "program files", "program files (x86)", "programdata",
+              "$recycle.bin", "system volume information", "$winreagent", "$sysreset",
+              "recovery", "boot", "efi", "documents and settings", "$windows.~bt",
+              "$windows.~ws", "perflogs"}
+USER_DIRS = {"downloads", "documents", "desktop", "pictures", "videos", "music",
+             "onedrive", "下载", "文档", "桌面", "图片", "视频", "音乐"}
+BIG_FILE_EXT = {".iso", ".img", ".zip", ".rar", ".7z", ".tar", ".gz", ".xz",
+                ".mp4", ".mkv", ".mov", ".avi", ".wmv", ".flv", ".vhd", ".vhdx",
+                ".vmdk", ".vdi", ".mdf", ".bak", ".dmp"}
+USER_MIN = 512 * 1024 ** 2
+FOLDER_MIN = 1024 ** 3
+APP_TABLE = {
+    "wegame": "WeGame", "steam": "Steam", "steamapps": "Steam", "epic": "Epic Games",
+    "origin": "Origin", "battle.net": "暴雪战网", "blizzard": "暴雪战网",
+    "honkai": "米哈游（崩坏/星穹铁道）", "genshin": "原神", "mihoyo": "米哈游",
+    "naraka": "永劫无间", "qq飞车": "QQ飞车", "tencent": "腾讯游戏",
+    "netease": "网易游戏", "wechat": "微信", "微信": "微信", "dingtalk": "钉钉",
+    "钉钉": "钉钉", "adobe": "Adobe", "autodesk": "Autodesk", "microsoft office": "Office",
+}
+MIGRATION_ROOT = "磁盘清理迁移"
+
+
+def match_app(text):
+    low = str(text).casefold()
+    for key, name in APP_TABLE.items():
+        if key in low:
+            return name
+    return ""
+
+
+def classify_path(path):
+    """返回 (类别, 应用名)。类别：system / migrate-app / migrate-user / skip。
+
+    判定顺序：先认具体应用/用户数据（层级可深），再判断是否处于系统保留顶层。
+    """
+    parts = [p.casefold() for p in Path(path).parts]
+    head = parts[1] if len(parts) > 1 else ""
+    tail = parts[-1] if parts else ""
+    if tail in ("pagefile.sys", "hiberfil.sys", "swapfile.sys"):
+        return "system", ""
+    app = match_app(" ".join(parts))
+    if app and len(parts) > 2:
+        return "migrate-app", app
+    if "appdata" in parts and len(parts) > 4:
+        return "migrate-app", match_app(path) or "该应用"
+    if any(seg in USER_DIRS for seg in parts):
+        return "migrate-user", ""
+    if Path(path).suffix.casefold() in BIG_FILE_EXT:
+        return "migrate-user", ""
+    if head in SYSTEM_TOP:
+        return "system", ""
+    return "skip", ""
+
+
+def _migration_target(state, source, path):
+    """在可用空间最大的空白盘上生成唯一目标路径。"""
+    rows = [r for r in disk_rows() if "free" in r and r["disk"] != source]
+    if not rows:
+        return None, None
+    target = max(rows, key=lambda r: r["free"])
+    rel = Path(path)
+    parts = [p for p in rel.parts[1:]]
+    name = ("_".join(parts) or rel.name or "data")[:120]
+    base = Path(target["disk"] + ":\\") / MIGRATION_ROOT / (source + "_" + name)
+    dst = base
+    seq = 2
+    while dst.exists():
+        dst = Path(str(base) + f"_{seq}")
+        seq += 1
+        if seq > 50:
+            return None, None
+    return str(dst), target
+
+
+def auto_plan(state, seconds):
+    """扫描完成后自动识别可迁移内容与系统项，追加建议。不依赖外部手写清单。"""
+    notes = []
+    disks = [r for r in disk_rows() if "free" in r]
+    if not disks:
+        return notes
+    src_disk = min((d["disk"] for d in disks if d["disk"] in state["targets"]),
+                   key=lambda d: next(x["free"] / x["total"] for x in disks if x["disk"] == d),
+                   default=None)
+    if not src_disk:
+        return notes
+    known = {row["path"].casefold(): row for row in state["found"]}
+    candidates = {}
+
+    def put(path, size):
+        key = str(path).casefold()
+        if key in known:
+            candidates[key] = (known[key], size)
+        elif key not in candidates:
+            row = {"id": uuid.uuid4().hex, "disk": src_disk, "path": str(path),
+                   "name": Path(path).name, "bytes": size, "coverage": "自动识别的可迁移内容",
+                   "directory": Path(path).is_dir(), "links": 0, "errors": 0, "pending": False}
+            candidates[key] = (row, size)
+
+    users_root = Path(src_disk + ":\\Users")
+    if users_root.is_dir():
+        try:
+            for user in users_root.iterdir():
+                if user.name.casefold() in ("public", "default", "default user", "all users"):
+                    continue
+                for sub in ("Downloads", "Documents", "Desktop", "Pictures", "Videos", "Music", "OneDrive"):
+                    folder = user / sub
+                    try:
+                        if not folder.is_dir() or is_link(folder.lstat()):
+                            continue
+                        rows, _ = inspect_volume(src_disk, seconds, folder)
+                        size = sum(r["bytes"] for r in rows)
+                        if size >= USER_MIN:
+                            put(folder, size)
+                    except OSError:
+                        continue
+        except OSError as exc:
+            notes.append(f"{src_disk} 盘用户目录枚举受限：{exc}")
+
+    for row in list(state["found"]):
+        if row["disk"] != src_disk or not row.get("directory") or row["bytes"] < FOLDER_MIN:
+            continue
+        kind, _ = classify_path(row["path"])
+        if kind == "system" and not any(seg in ("program files", "program files (x86)")
+                                        for seg in Path(row["path"]).parts):
+            continue
+        try:
+            rows, _ = inspect_volume(src_disk, seconds, Path(row["path"]))
+        except OSError:
+            continue
+        for child in rows:
+            if child["bytes"] < FOLDER_MIN:
+                continue
+            child_kind, _ = classify_path(child["path"])
+            if child_kind == "system":
+                continue
+            if kind == "system" and child_kind != "migrate-app":
+                continue
+            put(child["path"], child["bytes"])
+
+    for row, size in sorted(candidates.values(), key=lambda item: -item[1])[:12]:
+        dst, target = _migration_target(state, src_disk, row["path"])
+        if not dst:
+            notes.append(f"未找到可承接 {row['name']} 的空白盘，已跳过迁移建议。")
+            break
+        if target["free"] < size:
+            notes.append(f"{target['disk']} 盘剩余不足，无法承接 {row['name']}。")
+            continue
+        if row["id"] not in known:
+            state["found"].append(row)
+        kind, app = classify_path(row["path"])
+        if kind == "migrate-app" and app:
+            note = (f"这是 {app} 的数据或安装目录。搬迁后必须在该应用的设置里修改存储位置"
+                    f"（如 WeGame/Steam 的存储位置、微信的文件管理路径），否则应用可能找不到数据。")
+            action = "migrate"
+        else:
+            note = "这是用户数据，搬迁通常无需改应用设置；路径已整体保留到目标盘。"
+            action = "migrate"
+        state["proposals"].append({
+            "id": row["id"], "action": action, "estimate": size,
+            "recommendation": f"把 {row['name']}（{size / 1024**3:.1f} GiB）从 {src_disk} 盘迁移到 {target['disk']} 盘的空白位置，腾出源盘空间。",
+            "impact": note,
+            "target": f"目标位置：{dst}（{target['disk']} 盘当前可用 {target['free'] / 1024**3:.1f} GiB）",
+            "targetPath": dst, "sourceDisk": src_disk, "targetDisk": target["disk"], "auto": True,
+            "needAppReset": bool(app),
+        })
+
+    for disk in state["targets"]:
+        root = Path(disk + ":\\")
+        for label, fname, advice in (
+                ("虚拟内存文件 pagefile.sys", "pagefile.sys",
+                 "在系统属性→高级→性能→高级→虚拟内存里改为固定较小值或由系统管理；改动需重启后生效。"),
+                ("休眠文件 hiberfil.sys", "hiberfil.sys",
+                 "若不用休眠，管理员命令行执行 powercfg /h off 可整文件释放；会同时关闭快速启动。")):
+            f = root / fname
+            try:
+                size = f.lstat().st_size if f.exists() else 0
+            except OSError:
+                size = 0
+            if not size:
+                continue
+            rid = uuid.uuid4().hex
+            state["found"].append({"id": rid, "disk": disk, "path": str(f), "name": label,
+                                   "bytes": size, "coverage": "系统文件", "directory": False,
+                                   "links": 0, "errors": 0, "pending": False})
+            state["proposals"].append({
+                "id": rid, "action": "system", "estimate": size,
+                "recommendation": f"{label} 占 {size / 1024**3:.1f} GiB，可按需回收。",
+                "impact": "系统级改动，请确认使用场景后操作；改动前建议记录原设置。",
+                "target": advice, "auto": True,
+            })
+    rid = uuid.uuid4().hex
+    state["found"].append({"id": rid, "disk": state["targets"][0], "path": "C:\\Windows\\WinSxS",
+                           "name": "Windows 组件存储", "bytes": 0, "coverage": "系统组件存储 · 大小待测",
+                           "directory": True, "links": 0, "errors": 0, "pending": False})
+    state["proposals"].append({
+        "id": rid, "action": "system", "estimate": None,
+        "recommendation": "组件存储保存了被更新替换的旧版本，通常可回收数 GB。",
+        "impact": "清理后无法卸载此前已安装的旧更新；系统本身不受影响。",
+        "target": "管理员命令行执行：Dism /Online /Cleanup-Image /StartComponentCleanup",
+        "auto": True,
+    })
+    state["proposals"].sort(key=lambda p: -(p.get("estimate") or 0))
+    notes.append(f"已自动生成 {len(state['proposals'])} 条建议（含迁移、系统项与回收站）。")
+    return notes
+
+
 def write_page(path, template, state, history_link):
     payload = json.dumps({**state, "historyLink": history_link}, ensure_ascii=False).replace("<", "\\u003c")
     temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
@@ -410,7 +617,10 @@ def create_run(args, disks):
     if args.command in ("scan", "deep"):
         found, proposals, warnings = deep_scan(disks, args.seconds)
         state.update(found=found, proposals=proposals if args.command == "deep" else [],
-                     warnings=warnings, scanTime=timestamp())
+                     warnings=warnings, scanTime=timestamp(),
+                     scanFull=(args.seconds <= 0))
+        if args.command == "deep":
+            warnings.extend(auto_plan(state, args.seconds))
     if args.command in ("basic", "deep"):
         state["basic"] = execute_basic(disks)
     directory.mkdir(parents=True, exist_ok=True)
@@ -459,6 +669,42 @@ def drill(state, item_id, seconds):
     state["revision"] = uuid.uuid4().hex
 
 
+def migrate_target(state, row, proposal):
+    """把 row.path 真实迁移到 proposal.targetPath，robocopy /MOVE 后校验。"""
+    source = Path(row["path"])
+    raw_dst = proposal.get("targetPath")
+    if not raw_dst or not isinstance(raw_dst, str):
+        raise OSError("本条缺少有效的目标位置，未执行迁移。")
+    destination = Path(raw_dst)
+    allowed = {d["disk"] + ":\\" for d in disk_rows() if "free" in d}
+    if destination.drive[:1].upper() + ":\\" not in allowed:
+        raise OSError("目标盘不是本机固定盘，未执行迁移。")
+    if row["disk"].upper() + ":\\" == destination.drive[:1].upper() + ":\\":
+        raise OSError("目标与源在同一盘，无法腾出空间，未执行迁移。")
+    if not source.exists():
+        raise OSError("源路径已不存在，跳过迁移。")
+    ordinary_path(source)
+    if source.resolve() == destination.resolve() or source in destination.parents or destination in source.parents:
+        raise OSError("源与目标路径重叠，未执行迁移。")
+    free = next((d["free"] for d in disk_rows()
+                 if "free" in d and d["disk"] + ":\\" == destination.drive[:1].upper() + ":\\"), 0)
+    need = row.get("bytes") or 0
+    if need and free < need:
+        raise OSError(f"目标盘可用 {free / 1024**3:.1f} GiB 小于需迁移 {need / 1024**3:.1f} GiB，未执行。")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    cmd = ["robocopy.exe", str(source), str(destination), "/MOVE", "/E", "/XJ", "/XJD",
+           "/R:1", "/W:1", "/MT:16", "/NJH", "/NJS", "/NP", "/NFL", "/NDL"]
+    result = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8",
+                            errors="replace", timeout=7 * 24 * 3600)
+    if result.returncode >= 8:
+        raise OSError(f"robocopy 返回 {result.returncode}，迁移可能不完整，请核对源与目标。")
+    if source.exists():
+        raise OSError("复制后源目录仍存在，可能有未迁移的文件，请核对。")
+    if not destination.exists():
+        raise OSError("目标位置未生成，迁移失败。")
+    return str(destination)
+
+
 def apply_selection(directory, state, source):
     choice = load(source)
     fields = [state.get(k) for k in ("runId", "revision", "proposals", "found")]
@@ -476,10 +722,14 @@ def apply_selection(directory, state, source):
     if not set(choices) <= proposals.keys():
         raise ValueError("所选编号不在本轮建议中，请打开本轮最新页面。")
     planned = [(proposals[key], rows[key]) for key in choices]
-    targets = [Path(row["path"]) for _, row in planned]
-    if any(a == b or a in b.parents or b in a.parents
-           for i, a in enumerate(targets) for b in targets[i + 1:]):
-        raise ValueError("本轮选择包含重复或重叠的父子路径，请返回页面保留其中一项。")
+    targets = [(Path(row["path"]), row.get("name") or row["path"]) for _, row in planned]
+    for i, (a, name_a) in enumerate(targets):
+        for b, name_b in targets[i + 1:]:
+            if a == b or a in b.parents or b in a.parents:
+                raise ValueError(
+                    f"本轮选择含重叠目标：{name_a}（{a}）与 {name_b}（{b}）"
+                    "是同一路径或父子目录，请返回页面只保留其中一项。"
+                )
     before = sample(state["targets"])
     entries = []
     for proposal, row in planned:
@@ -495,6 +745,12 @@ def apply_selection(directory, state, source):
                 entry.update(status="完成" if not remaining["count"] else "有残留",
                              note=f"复核剩余 {remaining['count']} 项")
             except Exception as exc:
+                entry.update(status="未确认完成", note=str(exc))
+        elif action == "migrate":
+            try:
+                moved = migrate_target(state, row, proposal)
+                entry.update(status="完成", note=f"已迁移到 {moved}。" + proposal.get("impact", ""))
+            except (OSError, ValueError, subprocess.SubprocessError) as exc:
                 entry.update(status="未确认完成", note=str(exc))
         else:
             entry.update(status="待 WorkBuddy 打开指定入口", note=proposal["target"])
@@ -525,7 +781,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("command", choices=["drives", "scan", "basic", "deep", "drill", "recommend", "apply", "verify"])
     parser.add_argument("--drives", nargs="+", help="目标盘，例如 C D")
-    parser.add_argument("--seconds", type=int, default=30, help="深度扫描每盘预算")
+    parser.add_argument("--seconds", type=int, default=0,
+                        help="每盘扫描预算秒数；0 表示不限时完整扫描（默认，真·全盘）")
     parser.add_argument("--run", type=Path, help="本轮 run.json 路径")
     parser.add_argument("--input", type=Path, help="建议、选择或复核回填 JSON")
     parser.add_argument("--id", help="需要细分的目录条目 ID")
@@ -539,14 +796,14 @@ def main():
         available = [r["disk"] for r in disk_rows() if "free" in r]
         disks = [v.upper().removesuffix(":") for v in (args.drives or available)]
         disks = list(dict.fromkeys(disks))
-        if not disks or not set(disks).issubset(available) or args.seconds < 1:
-            parser.error("请选择可用的本机固定盘，并提供正数扫描预算。")
+        if not disks or not set(disks).issubset(available) or args.seconds < 0:
+            parser.error("请选择可用的本机固定盘，扫描预算须为非负整数（0 表示完整扫描）。")
         create_run(args, disks)
         return
     if not args.run or (args.command in ("apply", "recommend") and not args.input):
         parser.error("请提供 --run 与此操作要求的 --input。")
-    if args.command == "drill" and (not args.id or args.seconds < 1):
-        parser.error("细分排查请提供 --id 和正数扫描预算。")
+    if args.command == "drill" and (not args.id or args.seconds < 0):
+        parser.error("细分排查请提供 --id 和非负扫描预算（0 表示完整细分）。")
     run_path = args.run.resolve()
     if run_path.name != "run.json" or run_path.parent.parent != BASE / "runs":
         parser.error("请选择此工作台生成的本轮 run.json。")

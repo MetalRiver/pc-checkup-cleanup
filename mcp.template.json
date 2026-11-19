@@ -1,0 +1,10 @@
+{
+  "_readme": "这是配置模板。请不要直接使用本文件——运行 install.py 会自动把占位符替换为当前解释器和实际脚本路径，并写入用户级 ~/.workbuddy/mcp.json。换机器后重跑 install.py 即可。",
+  "mcpServers": {
+    "disk-cleanup-review": {
+      "command": "__PYTHON_EXECUTABLE__",
+      "args": ["-B", "__REVIEW_BRIDGE_PATH__"],
+      "type": "stdio"
+    }
+  }
+}

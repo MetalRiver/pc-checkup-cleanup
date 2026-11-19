@@ -122,9 +122,14 @@ def validate_selection(s, payload):
             or not all(isinstance(i, str) and i in by_id for i in ids) or len(ids) != len(set(ids))):
         raise ValueError("选择与本轮条目不匹配。")
     rows = {r["id"]: r for r in plan["found"]}
-    paths = [Path(rows[i]["path"]) for i in ids]
-    if any(a == b or a in b.parents or b in a.parents for n, a in enumerate(paths) for b in paths[n+1:]):
-        raise ValueError("选择中含有重叠目标。")
+    chosen = [(Path(rows[i]["path"]), rows[i].get("name") or rows[i]["path"]) for i in ids]
+    for n, (a, name_a) in enumerate(chosen):
+        for b, name_b in chosen[n + 1:]:
+            if a == b or a in b.parents or b in a.parents:
+                raise ValueError(
+                    f"选择中含有重叠目标：{name_a}（{a}）与 {name_b}（{b}）是同一路径或父子目录，"
+                    "请返回页面只保留其中一项后重新提交。"
+                )
     return ids
 
 
@@ -297,7 +302,7 @@ def dispatch(request):
     if method == "initialize":
         supported = ("2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05")
         return {"protocolVersion": params.get("protocolVersion") if params.get("protocolVersion") in supported else supported[0],
-                "capabilities":{"tools":{}}, "serverInfo":{"name":"disk-cleanup-review", "version":"1.0.0"}}
+                "capabilities":{"tools":{}}, "serverInfo":{"name":"disk-cleanup-review", "version":"1.2.1"}}
     if method == "ping":
         return {}
     if method == "tools/list":

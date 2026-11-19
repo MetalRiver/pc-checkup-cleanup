@@ -27,6 +27,45 @@ small{color:var(--muted)}
 .capacity-bar span{display:block;height:100%;background:var(--blue);border-radius:inherit}
 .metric .gain,.positive{color:var(--green)}
 .negative,.impact{color:var(--amber)}
+.auto-tag{display:inline-block;font-size:11px;padding:1px 7px;margin-right:6px;border-radius:999px;background:#eaf1fe;color:#2f6fdb;border:1px solid #cfe0fb}
+.app-tag{display:inline-block;font-size:11px;padding:1px 7px;margin:0 6px 4px 0;border-radius:999px;background:#fff3e6;color:#b26a00;border:1px solid #f3d9ac}
+/* 待你决定：分类切换 + 红色提醒点 */
+.tab-label{position:relative;display:inline-flex;align-items:center;gap:5px}
+.alert-dot{position:absolute;top:-6px;right:-11px;min-width:18px;height:18px;padding:0 5px;border-radius:9px;background:#e5342b;color:#fff;font-size:11px;font-weight:700;line-height:18px;text-align:center;box-shadow:0 0 0 2px var(--bg);font-variant-numeric:tabular-nums}
+.alert-dot.pulse{animation:dotPulse 1.6s ease-in-out infinite}
+@keyframes dotPulse{0%,100%{box-shadow:0 0 0 2px var(--bg)}50%{box-shadow:0 0 0 2px var(--bg),0 0 0 6px rgba(229,52,43,.18)}}
+.catbar{display:flex;gap:8px;flex-wrap:wrap;margin:14px 0 4px}
+.catbar button{background:var(--surface);border:1px solid var(--line);border-radius:999px;padding:6px 13px;font-size:13px;color:var(--muted);display:inline-flex;align-items:center;gap:6px;transition:all .15s}
+.catbar button:hover{border-color:#9db8e8;color:var(--ink)}
+.catbar button[aria-selected=true]{background:var(--blue);border-color:var(--blue);color:#fff;font-weight:700}
+.catbar button .badge{min-width:19px;height:19px;padding:0 5px;border-radius:10px;background:#e9eef6;color:#4a5b70;font-size:11px;font-weight:700;line-height:19px;text-align:center}
+.catbar button[aria-selected=true] .badge{background:rgba(255,255,255,.24);color:#fff}
+.catbar button .badge.warn{background:#fde3e1;color:#c62828}
+.catbar button[aria-selected=true] .badge.warn{background:rgba(255,255,255,.24);color:#fff}
+.catbar button svg{width:15px;height:15px;vertical-align:-3px}
+.chip.act svg{width:12px;height:12px;vertical-align:-2px;margin-right:2px}
+.cat-empty{padding:18px;text-align:center;color:var(--muted)}
+/* 基础清理 / 深度清理 展示卡片 */
+.phase-head{display:flex;align-items:center;gap:10px;margin:20px 0 10px}
+.phase-head .phase-ico{width:30px;height:30px;border-radius:9px;display:grid;place-items:center;font-size:16px;flex:none}
+.phase-head .phase-ico svg{width:17px;height:17px}
+.phase-head.phase-basic .phase-ico{background:#e8f2ff;color:#2054be}
+.phase-head.phase-deep .phase-ico{background:#e9f6ef;color:#176c49}
+.phase-head h2{margin:0;font-size:17px}
+.phase-head .phase-sub{font-size:12px;color:var(--muted)}
+.phase-note{background:#f6f9fe;border:1px solid #dce7f7;border-radius:10px;padding:10px 14px;margin:0 0 12px;font-size:13px;color:var(--muted)}
+.phase-note b{color:var(--ink)}
+.grid-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:11px;margin-bottom:6px}
+.mini-card{background:var(--surface);border:1px solid var(--line);border-radius:11px;padding:13px 15px}
+.mini-card .mc-top{display:flex;justify-content:space-between;align-items:baseline;gap:8px}
+.mini-card .mc-name{font-weight:700;overflow-wrap:anywhere}
+.mini-card .mc-stat{margin-top:7px;display:flex;gap:12px;flex-wrap:wrap;font-size:12px;color:var(--muted)}
+.mini-card .mc-stat b{color:var(--ink)}
+.chip{display:inline-block;font-size:11px;padding:1px 8px;border-radius:999px;font-weight:700}
+.chip.ok{background:#e6f5ec;color:#176c49}
+.chip.skip{background:#fff2e4;color:#a55b12}
+.chip.wait{background:#eef1f6;color:#5a6b80}
+.chip.act{background:#e8f0ff;color:#2054be}
 nav{display:flex;gap:18px;border-bottom:1px solid var(--line);margin-bottom:16px;overflow:auto}
 nav button{background:none;border:0;border-bottom:3px solid transparent;border-radius:0;white-space:nowrap;padding:9px 1px}
 nav button[aria-selected=true]{color:var(--blue);border-color:var(--blue);font-weight:700}
@@ -63,6 +102,26 @@ button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible,su
 .primary{background:var(--blue);color:#fff;border:none;border-radius:8px;padding:10px 14px;white-space:nowrap}
 .primary:disabled{background:#dce3ec;color:#536279;cursor:default}
 .command{display:block;overflow:auto;background:#f1f5fb;padding:8px 11px;border-radius:6px;margin:12px 0;color:#234166}
+.toast{position:fixed;top:18px;right:18px;max-width:min(440px,calc(100vw - 36px));display:flex;gap:12px;align-items:flex-start;background:var(--surface);border:1px solid var(--line);border-left:4px solid var(--green);border-radius:12px;padding:13px 14px;box-shadow:0 14px 40px rgba(16,30,50,.18);z-index:8}
+.toast.warn{border-left-color:var(--amber)}
+.toast.err{border-left-color:#c62828}
+.toast-ico{width:22px;height:22px;flex:none;color:var(--green)}
+.toast.warn .toast-ico{color:var(--amber)}
+.toast.err .toast-ico{color:#c62828}
+.toast-ico svg{width:22px;height:22px}
+.toast p{margin:3px 0 0;font-size:13px;line-height:1.5}
+.toast>button{margin-left:auto;background:none;border:0;color:var(--muted);font-size:20px;line-height:1;padding:0 2px}
+.dialog-mask{position:fixed;inset:0;background:rgba(16,30,50,.48);display:grid;place-items:center;padding:20px;z-index:9}
+.dialog{background:var(--surface);border:1px solid var(--line);border-radius:14px;max-width:500px;width:100%;padding:22px 24px;box-shadow:0 18px 50px rgba(16,30,50,.2)}
+.dialog-icon{width:38px;height:38px;border-radius:10px;display:grid;place-items:center;margin-bottom:12px;background:#e6f5ec;color:var(--green)}
+.dialog-icon svg{width:22px;height:22px}
+.dialog-mask.warn .dialog-icon{background:#fff2e4;color:var(--amber)}
+.dialog-mask.err .dialog-icon{background:#fde3e1;color:#c62828}
+.dialog h2{margin:0 0 8px;font-size:19px}
+.dialog p{margin:6px 0}
+.dialog-details{background:#f6f8fc;border:1px solid var(--line);border-radius:8px;padding:9px 12px;margin-top:12px;color:var(--muted);font-size:13px;max-height:180px;overflow:auto}
+.dialog-details div{padding:3px 0;overflow-wrap:anywhere}
+.dialog-actions{display:flex;justify-content:flex-end;margin-top:18px}
 [hidden]{display:none!important}
 @media(max-width:670px){.table-head{display:none}.decision-main,.finding{grid-template-columns:1fr 1fr;gap:8px 14px}.decision-main .description,.finding>div:first-child{grid-column:1/-1}.decision-main>div:first-child{grid-column:1/-1}.checkbox{justify-content:end}.summary{grid-template-columns:repeat(auto-fit,minmax(156px,1fr))}.bar .frame{flex-wrap:wrap}.primary{white-space:normal}main{padding-bottom:160px}}
 </style>
@@ -74,7 +133,7 @@ button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible,su
   <p id="subtitle"></p>
   <div class="summary" id="summary"></div>
   <nav id="tabs" aria-label="工作台视图">
-    <button type="button" data-tab="decisions" aria-controls="decisions">待你决定</button>
+    <button type="button" data-tab="decisions" aria-controls="decisions"><span class="tab-label">待你决定<span id="decision-dot" class="alert-dot" hidden></span></span></button>
     <button type="button" data-tab="findings" aria-controls="findings">全部发现</button>
     <button type="button" data-tab="results" aria-controls="results">执行记录</button>
   </nav>
@@ -90,6 +149,16 @@ button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible,su
   <div><strong id="selection" aria-live="polite">尚未选择</strong><small id="export-status">选择将返回发起本轮任务的 WorkBuddy 对话。</small></div>
   <button class="primary" type="button" id="submit" disabled>交给 WorkBuddy 执行</button>
 </div></footer>
+<div class="toast" id="toast" role="status" aria-live="polite" hidden><span class="toast-ico" id="toast-ico"></span><div><strong id="toast-title"></strong><p id="toast-message"></p></div><button type="button" id="toast-close" aria-label="关闭提示">×</button></div>
+<div class="dialog-mask" id="dialog-mask" hidden>
+  <div class="dialog" role="alertdialog" aria-modal="true" aria-labelledby="dialog-title" aria-describedby="dialog-message">
+    <div class="dialog-icon" id="dialog-icon"></div>
+    <h2 id="dialog-title"></h2>
+    <div id="dialog-message"></div>
+    <div class="dialog-details" id="dialog-details" hidden></div>
+    <div class="dialog-actions"><button class="primary" type="button" id="dialog-ok">知道了</button></div>
+  </div>
+</div>
 <script type="application/json" id="run"><!--RUN-DATA--></script>
 <script>
 const get = id => document.getElementById(id);
@@ -104,6 +173,70 @@ const size = bytes => {
 const signed = bytes => Number.isFinite(bytes) ? (bytes >= 0 ? '+' : '−') + size(Math.abs(bytes)) : '待测';
 const localTime = time => time ? time.replace('T', ' ') : '时间未知';
 const actionName = {'read-space':'读取磁盘余量',recycle:'清空回收站','recycle-review':'核实后清空该盘回收站',uninstall:'卸载软件',migrate:'迁移数据','app-clean':'清理应用存储',system:'调整系统设置'};
+// 矢量小图标（内联 SVG，避免 emoji，缩放清晰）
+const ICON = {
+  broom:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 4l-8 8M14 3l7 7M11 12l-7 8 3 1 1 2 2-1 1-3 3-2z"/></svg>',
+  box:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7l9-4 9 4v10l-9 4-9-4zM3 7l9 4 9-4M12 11v10"/></svg>',
+  trash:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/></svg>',
+  gear:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M5 5l2 2M17 17l2 2M19 5l-2 2M7 17l-2 2"/></svg>',
+  scan:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8V5a1 1 0 011-1h3M16 4h3a1 1 0 011 1v3M20 16v3a1 1 0 01-1 1h-3M8 20H5a1 1 0 01-1-1v-3M4 12h16"/></svg>',
+  deep:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M16 16l5 5"/></svg>',
+  check:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M8 12l3 3 5-6"/></svg>',
+  alert:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l10 18H2z"/><path d="M12 9v5M12 17v.1"/></svg>',
+  x:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M9 9l6 6M15 9l-6 6"/></svg>',
+};
+let toastTimer = null;
+function notify(kind, title, message, details) {
+  const toast = get('toast');
+  get('toast-ico').innerHTML = ICON[kind] || ICON.check;
+  toast.className = 'toast ' + (kind || 'ok');
+  get('toast-title').textContent = title;
+  get('toast-message').textContent = message;
+  document.querySelectorAll('.dialog-details,.toast').forEach(node => { if (node.id !== 'toast') node.hidden = true; });
+  toast.hidden = false;
+  if (toastTimer) clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { toast.hidden = true; }, kind === 'ok' ? 4200 : 6500);
+  if (details && details.length) {
+    openDialog(kind, title, message, details);
+  }
+}
+function openDialog(kind, title, message, details) {
+  get('dialog-mask').className = 'dialog-mask ' + (kind || 'ok');
+  get('dialog-icon').innerHTML = ICON[kind] || ICON.check;
+  get('dialog-title').textContent = title;
+  get('dialog-message').textContent = message;
+  const detailBox = get('dialog-details');
+  detailBox.innerHTML = (details || []).map(item => '<div>' + escape(item) + '</div>').join('');
+  detailBox.hidden = !details || !details.length;
+  get('dialog-mask').hidden = false;
+  get('dialog-ok').focus();
+}
+function closeDialog() { get('dialog-mask').hidden = true; }
+function pathKey(raw) { return String(raw || '').replace(/\//g, '\\').toLowerCase().replace(/\\+$/, ''); }
+function overlappingPairs() {
+  const rows = new Map(run.found.map(row => [row.id, row]));
+  const chosen = [...selectedIds].map(id => rows.get(id)).filter(Boolean);
+  const pairs = [];
+  for (let i = 0; i < chosen.length; i++) {
+    for (let j = i + 1; j < chosen.length; j++) {
+      const a = pathKey(chosen[i].path), b = pathKey(chosen[j].path);
+      if (!a || !b) continue;
+      if (a === b || a.startsWith(b + '\\') || b.startsWith(a + '\\')) pairs.push([chosen[i], chosen[j]]);
+    }
+  }
+  return pairs;
+}
+// 决策分类：把动作归入「清理 / 搬迁 / 卸载 / 系统」四类，便于分别处理
+const CATEGORIES = [
+  {key:'clean',   label:'清理',   icon:ICON.broom, actions:['recycle','recycle-review','app-clean']},
+  {key:'migrate', label:'搬迁',   icon:ICON.box,   actions:['migrate']},
+  {key:'uninstall',label:'卸载',  icon:ICON.trash, actions:['uninstall']},
+  {key:'system',  label:'系统调整',icon:ICON.gear,  actions:['system','read-space']},
+];
+const categoryOf = action => (CATEGORIES.find(c => c.actions.includes(action)) || {key:'other'}).key;
+let activeCategory = 'all';
+const selectedIds = new Set();
+let locked = false;
 let run;
 try { run = JSON.parse(get('run').textContent); } catch { run = null; }
 
@@ -157,34 +290,83 @@ function findings() {
   get('found').innerHTML = sections || '<div class="panel empty">当前没有符合条件的发现。</div>';
 }
 
+function updateDecisionDot(count) {
+  const dot = get('decision-dot');
+  if (!dot) return;
+  const open = !run.deep && run.mode !== 'scan' && count > 0;
+  dot.hidden = !open;
+  if (open) {
+    dot.textContent = count > 99 ? '99+' : String(count);
+    dot.classList.toggle('pulse', count > 0);
+  }
+}
+
 function renderDecisions() {
   const rows = new Map(run.found.map(row => [row.id, row]));
   if (run.deep || !run.proposals.length) {
     get('decisions').innerHTML = '<div class="panel"><p>' + (run.deep
       ? '本轮已提交。处理状态见执行记录。' : '本轮没有需要你决定的项目。') + '</p></div>';
+    updateDecisionDot(0);
     return;
   }
-  get('decisions').innerHTML = '<p>勾选你愿意处理的项目，一次提交。</p><div class="panel">'
+  updateDecisionDot(run.proposals.length);
+
+  // 按分类统计数量
+  const counts = {all:run.proposals.length};
+  CATEGORIES.forEach(c => counts[c.key] = run.proposals.filter(p => categoryOf(p.action) === c.key).length);
+  const catbar = '<div class="catbar" role="tablist" aria-label="决策分类">'
+    + '<button type="button" role="tab" data-cat="all" aria-selected="' + (activeCategory === 'all')
+    + '">全部<span class="badge' + (counts.all > 0 ? ' warn' : '') + '">' + counts.all + '</span></button>'
+    + CATEGORIES.filter(c => counts[c.key] > 0).map(c =>
+        '<button type="button" role="tab" data-cat="' + c.key + '" aria-selected="'
+        + (activeCategory === c.key) + '">' + c.icon + c.label
+        + '<span class="badge">' + counts[c.key] + '</span></button>').join('')
+    + '</div>';
+  get('decisions').innerHTML = '<p>按类型勾选你愿意处理的项目，一次提交。共 <b>' + counts.all + '</b> 项待决定。</p>'
+    + catbar + '<div id="decision-rows"></div>';
+  paintDecisionRows(rows);
+  get('decisions').querySelectorAll('[data-cat]').forEach(button => {
+    button.addEventListener('click', () => {
+      activeCategory = button.dataset.cat;
+      get('decisions').querySelectorAll('[data-cat]').forEach(b =>
+        b.setAttribute('aria-selected', String(b === button)));
+      paintDecisionRows(rows);
+    });
+  });
+}
+
+function paintDecisionRows(rows) {
+  const list = run.proposals.filter(p => activeCategory === 'all' || categoryOf(p.action) === activeCategory);
+  if (!list.length) {
+    get('decision-rows').innerHTML = '<div class="panel cat-empty">这一类当前没有待决定项目。</div>';
+    return;
+  }
+  get('decision-rows').innerHTML = '<div class="panel">'
     + '<div class="table-head"><span>对象</span><span>AI 建议</span><span>预计收益</span><span>本轮选择</span></div>'
-    + run.proposals.map(p => {
+    + list.map(p => {
       const row = rows.get(p.id);
       const preview = p.action === 'recycle'
         ? '<p>在资源管理器打开回收站，按“原位置”核对 ' + row.disk + ' 盘的文件。</p>' : '';
+      const autoTag = p.auto ? '<span class="auto-tag">自动识别</span>' : '';
+      const appTag = p.needAppReset
+        ? '<div><span class="app-tag">迁移后需在应用设置里改存储位置</span></div>' : '';
+      const cat = CATEGORIES.find(c => c.key === categoryOf(p.action));
+      const catTag = '<span class="chip act">' + (cat ? cat.icon + cat.label : escape(actionName[p.action])) + '</span> ';
       return '<article class="row"><div class="decision-main"><div><div class="name">' + row.disk
         + ' 盘 · ' + escape(row.name) + '</div><small>' + (row.pending || row.errors ? '已读取部分 ' : '当前记录 ') + size(row.bytes) + '</small></div>'
-        + '<div class="description"><b>' + escape(actionName[p.action]) + '</b><p>'
+        + '<div class="description"><b>' + catTag + autoTag + escape(actionName[p.action]) + '</b>' + appTag + '<p>'
         + escape(p.recommendation) + '</p><small class="impact">' + escape(p.impact) + '</small></div>'
         + '<span class="number">' + size(p.estimate) + '</span>'
-        + '<label class="checkbox"><input type="checkbox" value="' + escape(p.id)
-        + '" aria-label="选中 ' + row.disk + ' 盘 ' + escape(row.name) + '">选中</label></div>'
+        + '<label class="checkbox"><input type="checkbox" value="' + escape(p.id) + '"'
+        + (selectedIds.has(p.id) ? ' checked' : '') + (locked ? ' disabled' : '')
+        + ' aria-label="选中 ' + row.disk + ' 盘 ' + escape(row.name) + '">选中</label></div>'
         + '<details><summary>查看路径与处理方式</summary><div class="detail"><p>' + escape(row.path)
         + '</p>' + (p.target ? '<p>' + escape(p.target) + '</p>' : '') + preview + '</div></details></article>';
     }).join('') + '</div>';
 }
 
 function selected() {
-  const ids = Array.from(get('decisions').querySelectorAll('input:checked'), input => input.value);
-  return run.proposals.filter(item => ids.includes(item.id));
+  return run.proposals.filter(item => selectedIds.has(item.id));
 }
 
 function selectionSummary() {
@@ -203,6 +385,7 @@ function selectionSummary() {
 let sending = false;
 let submitted = false;
 function lockSelection(lock) {
+  locked = lock;
   get('decisions').querySelectorAll('input[type=checkbox]').forEach(input => input.disabled = lock);
   get('submit').disabled = lock || !selected().length;
 }
@@ -217,7 +400,9 @@ async function readStatus() {
     }
     if (data.submitted) {
       submitted = true;
-      get('decisions').querySelectorAll('input[type=checkbox]').forEach(input => input.checked = data.ids.includes(input.value));
+      selectedIds.clear();
+      data.ids.forEach(id => selectedIds.add(id));
+      get('decisions').querySelectorAll('input[type=checkbox]').forEach(input => input.checked = selectedIds.has(input.value));
       selectionSummary();
       lockSelection(true);
       get('export-status').textContent = data.message;
@@ -225,6 +410,7 @@ async function readStatus() {
     if (!data.finished) setTimeout(readStatus, 2000);
   } catch {
     get('export-status').textContent = '连接中断。请回到原对话查看回执或重新打开本轮工作台。';
+    if (get('dialog-mask').hidden) notify('err', '工作台连接中断', '实时状态读取失败。请回到原对话查看回执，或重新打开本轮工作台后再提交。');
   }
 }
 async function submitSelection() {
@@ -232,6 +418,15 @@ async function submitSelection() {
   const ids = selected().map(item => item.id);
   if (!ids.length) return;
   if (!run.liveReview && !run.reviewUrl) return;
+  const overlaps = overlappingPairs();
+  if (overlaps.length) {
+    const detail = overlaps.slice(0, 4).map(pair => pair[0].name + '（' + pair[0].path + '） ↔ ' + pair[1].name + '（' + pair[1].path + '）');
+    if (overlaps.length > 4) detail.push('另有 ' + (overlaps.length - 4) + ' 组重叠未列出');
+    const message = '你勾选的项目中有父子目录或同一路径，同时处理会互相覆盖。请返回列表只保留其中一项后重新提交。';
+    notify('warn', '选择中有重叠目标，已阻止提交', message, detail);
+    get('export-status').textContent = '已阻止提交：存在重叠目标。';
+    return;
+  }
   const payload = JSON.stringify({runId:run.runId, revision:run.revision, ids});
   if (!run.liveReview) {
     const form = document.createElement('form');
@@ -249,9 +444,11 @@ async function submitSelection() {
     if (!response.ok) throw new Error(data.error || '提交失败');
     submitted = true;
     get('export-status').textContent = '已提交，等待当前对话领取。';
+    notify('ok', '已提交给 WorkBuddy', '当前对话已收到你的选择，请回到对话查看执行结果。工作台会继续显示进度。');
   } catch (error) {
     get('export-status').textContent = error.message;
     lockSelection(false);
+    notify('err', '提交失败', error.message || '请回到原对话重新打开工作台后再试。');
   } finally { sending = false; }
 }
 
@@ -287,24 +484,58 @@ if (!run) {
   run.targets.forEach(disk => get('disk').add(new Option(disk + ' 盘', disk)));
   renderDecisions();
   findings();
-  const basicDetails = (run.basic?.groups ?? []).map(group => '<div class="result"><b>'
-    + group.disk + ' 盘 · ' + escape(group.name) + '</b><div>处理 ' + group.done + ' 个 · 跳过 '
-    + group.skipped + ' 个 · 已处理文件逻辑大小 ' + size(group.removed) + '</div>'
-    + (group.examples.length ? '<small>' + group.examples.map(escape).join('<br>') + '</small>' : '') + '</div>').join('');
-  const deepDetails = (run.deep?.entries ?? []).map(row => '<div class="result"><b>'
-    + row.disk + ' 盘 · ' + escape(row.name) + '</b><div>' + escape(actionName[row.action])
-    + ' · ' + escape(row.status) + '</div><small>' + escape(row.note) + '</small></div>').join('');
-  const notes = [...run.warnings, ...(run.basic?.notes ?? [])];
-  get('results').innerHTML = '<div class="panel">' + measurement('基础清理 · 磁盘实测', run.basic)
-    + (run.basic && !basicDetails ? '<div class="result">未发现符合当前规则的基础项目。</div>' : basicDetails)
-    + measurement('深度处理 · 磁盘实测', run.deep ? {...run.deep, after:run.deep.reviews?.at(-1) ?? run.deep.after} : null)
-    + deepDetails + (notes.length ? '<details class="result"><summary>读取与处理备注（' + notes.length
+  const phaseHead = (cls, ico, title, sub) => '<div class="phase-head ' + cls + '"><span class="phase-ico">'
+    + ico + '</span><div><h2>' + title + '</h2><div class="phase-sub">' + sub + '</div></div></div>';
+  const statusChip = status => {
+    const cls = /完成$/.test(status) && !/未确认/.test(status) ? 'ok'
+      : /未确认|需要重新|变化/.test(status) ? 'skip'
+      : /待/.test(status) ? 'wait' : 'act';
+    return '<span class="chip ' + cls + '">' + escape(status || '已记录') + '</span>';
+  };
+  const basicGroups = run.basic?.groups ?? [];
+  const basicCards = basicGroups.map(group => '<div class="mini-card">'
+    + '<div class="mc-top"><span class="mc-name">' + group.disk + ' 盘 · ' + escape(group.name) + '</span>'
+    + statusChip(group.skipped ? '部分跳过' : '完成') + '</div>'
+    + '<div class="mc-stat"><span>已删 <b>' + group.done + '</b> 个</span>'
+    + (group.skipped ? '<span class="negative">跳过 <b>' + group.skipped + '</b> 个</span>' : '')
+    + '<span>逻辑大小 <b>' + size(group.removed) + '</b></span></div>'
+    + (group.examples.length ? '<small>' + group.examples.map(escape).join('<br>') + '</small>' : '')
+    + '</div>').join('');
+  const deepEntries = run.deep?.entries ?? [];
+  const deepCards = deepEntries.map(row => '<div class="mini-card">'
+    + '<div class="mc-top"><span class="mc-name">' + row.disk + ' 盘 · ' + escape(row.name) + '</span>'
+    + statusChip(row.status) + '</div>'
+    + '<div class="mc-stat"><span>' + escape(actionName[row.action] || row.action) + '</span></div>'
+    + (row.note ? '<small>' + escape(row.note) + '</small>' : '')
+    + '</div>').join('');
+  const notes = [...(run.warnings ?? []), ...(run.basic?.notes ?? [])];
+  get('results').innerHTML = '<div class="panel">'
+    + phaseHead('phase-basic', ICON.scan, '基础清理', '每次排查自动执行 · 只清公认安全的临时缓存')
+    + '<div class="phase-note"><b>基础清理涵盖：</b>DirectX 着色器缓存（D3DSCache）与资源管理器缩略图缓存（thumbcache），'
+    + '且仅处理 <b>7 天以上未修改</b>、无链接、单硬链接的普通缓存文件；文件被程序占用时自动跳过，不强行删除。'
+    + '它<b>不会</b>碰你的文档、下载、已装软件或游戏。</div>'
+    + measurement('磁盘实测 · 基础清理', run.basic)
+    + (basicGroups.length ? '<div class="grid-cards">' + basicCards + '</div>'
+        : (run.basic ? '<div class="result">未发现符合当前规则的基础项目，本次无可自动清理的缓存。</div>' : ''))
+    + phaseHead('phase-deep', ICON.deep, '深度清理', '按你勾选的项目执行 · 清理前先核实')
+    + measurement('磁盘实测 · 深度处理', run.deep ? {...run.deep, after:run.deep.reviews?.at(-1) ?? run.deep.after} : null)
+    + (deepEntries.length ? '<div class="grid-cards">' + deepCards + '</div>'
+        : (run.deep ? '<div class="result">本轮没有深度处理条目。</div>' : ''))
+    + (notes.length ? '<details class="result"><summary>读取与处理备注（' + notes.length
     + '）</summary><div class="detail">' + notes.map(escape).join('<br>') + '</div></details>' : '')
     + '</div>';
   get('search').addEventListener('input', findings);
   get('disk').addEventListener('change', findings);
-  get('decisions').addEventListener('change', selectionSummary);
+  get('decisions').addEventListener('change', event => {
+    const input = event.target;
+    if (!input.matches('input[type=checkbox]')) return;
+    if (input.checked) selectedIds.add(input.value); else selectedIds.delete(input.value);
+    selectionSummary();
+  });
   get('submit').addEventListener('click', submitSelection);
+  get('toast-close').addEventListener('click', () => { get('toast').hidden = true; });
+  get('dialog-ok').addEventListener('click', closeDialog);
+  get('dialog-mask').addEventListener('click', event => { if (event.target === get('dialog-mask')) closeDialog(); });
   if (run.liveReview) readStatus();
   if (!run.liveReview && !run.reviewUrl && run.mode === 'deep' && !run.deep) {
     lockSelection(true);
