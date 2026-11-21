@@ -1,7 +1,9 @@
 ---
-name: disk-space-checkup-cleanup
-version: 1.4.2
+name: disk-cleanup
+version: 1.4.3
 display_name: 全自动化系统电脑体检与清理
+author: 途有引力
+license: MIT
 display_name_en: Fully Automated System PC Checkup and Cleanup
 description: 在 Windows 上识别本机磁盘、排查空间占用、执行基础清理或生成可选择的深度清理 HTML，并复核各盘可用空间。用于“清理电脑”“C 盘快满了”“看看空间去哪了”等请求。
 description_zh: 在 Windows 上识别本机磁盘、排查空间占用、执行基础清理，或生成可勾选的深度清理页面，只执行用户勾选的项目并复核各盘可用空间。适用于“清理电脑”“C 盘快满了”“看看空间去哪了”等请求。仅支持 Windows 10/11。
