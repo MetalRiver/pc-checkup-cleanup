@@ -14,7 +14,7 @@ from urllib.parse import parse_qs
 import cleanup
 
 BASE = Path(__file__).resolve().parent
-TTL = 900
+TTL = 7200  # 2 小时；用户需逐条核对几十项，15 分钟太短
 sessions = {}
 guard = threading.RLock()
 server = None
@@ -59,7 +59,7 @@ def choice_path(run_id, handle):
     return BASE / "runs" / run_id / ("choice-" + handle + ".json")
 
 
-def session_for(handle, *, allow_submitted=False):
+def session_for(handle, *, allow_submitted=False, touch=False):
     s = sessions.get(handle)
     if s is None:
         raise ValueError("本轮交互连接已失效，请从当前 WorkBuddy 对话重新打开。")
@@ -70,6 +70,9 @@ def session_for(handle, *, allow_submitted=False):
             s["expires"] = time.monotonic() + TTL
         else:
             raise ValueError("本轮交互连接已过期，请从当前 WorkBuddy 对话重新打开。")
+    # 页面每 2 秒轮询 status 时滑动续期：只要用户还开着页面，就不超时。
+    if touch:
+        s["expires"] = time.monotonic() + TTL
     return s
 
 
@@ -322,6 +325,8 @@ class Page(BaseHTTPRequestHandler):
             s, route = self.target()
             if route == "status":
                 with guard:
+                    # 页面开着就在用：每次状态轮询滑动续期，避免逐项核对时会话超时中断。
+                    s["expires"] = time.monotonic() + TTL
                     self.respond(200, status_detail(s))
             elif route is None:
                 source = read_run(s["plan"]["runId"]) if s["received"] and not s["test"] else s["plan"]

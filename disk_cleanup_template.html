@@ -10,7 +10,7 @@
 body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.6 "Microsoft YaHei","PingFang SC",system-ui,sans-serif}
 button,select,input{font:inherit;color:inherit}
 a{color:var(--blue)}
-header{background:#162943;color:white}
+header{background:#162943;color:white;position:sticky;top:0;z-index:5}
 .frame{max-width:1180px;margin:auto;padding-inline:clamp(16px,4vw,44px)}
 header .frame{display:flex;justify-content:space-between;align-items:center;gap:12px;min-height:65px}
 header a{color:#dbebff;font-size:13px}
@@ -34,17 +34,34 @@ small{color:var(--muted)}
 .alert-dot{position:absolute;top:-6px;right:-11px;min-width:18px;height:18px;padding:0 5px;border-radius:9px;background:#e5342b;color:#fff;font-size:11px;font-weight:700;line-height:18px;text-align:center;box-shadow:0 0 0 2px var(--bg);font-variant-numeric:tabular-nums}
 .alert-dot.pulse{animation:dotPulse 1.6s ease-in-out infinite}
 @keyframes dotPulse{0%,100%{box-shadow:0 0 0 2px var(--bg)}50%{box-shadow:0 0 0 2px var(--bg),0 0 0 6px rgba(229,52,43,.18)}}
-.catbar{display:flex;gap:8px;flex-wrap:wrap;margin:14px 0 4px}
-.catbar button{background:var(--surface);border:1px solid var(--line);border-radius:999px;padding:6px 13px;font-size:13px;color:var(--muted);display:inline-flex;align-items:center;gap:6px;transition:all .15s}
-.catbar button:hover{border-color:#9db8e8;color:var(--ink)}
-.catbar button[aria-selected=true]{background:var(--blue);border-color:var(--blue);color:#fff;font-weight:700}
-.catbar button .badge{min-width:19px;height:19px;padding:0 5px;border-radius:10px;background:#e9eef6;color:#4a5b70;font-size:11px;font-weight:700;line-height:19px;text-align:center}
-.catbar button[aria-selected=true] .badge{background:rgba(255,255,255,.24);color:#fff}
-.catbar button .badge.warn{background:#fde3e1;color:#c62828}
-.catbar button[aria-selected=true] .badge.warn{background:rgba(255,255,255,.24);color:#fff}
-.catbar button svg{width:15px;height:15px;vertical-align:-3px}
 .chip.act svg{width:12px;height:12px;vertical-align:-2px;margin-right:2px}
 .cat-empty{padding:18px;text-align:center;color:var(--muted)}
+/* 统一筛选卡片：两组带序号标题的筛选行，左标签右按钮 */
+.filter-card{border:1px solid var(--line);border-radius:12px;background:var(--surface);padding:14px 16px;margin:12px 0}
+.filter-row{display:flex;align-items:flex-start;gap:14px;padding:8px 0}
+.filter-row + .filter-row{border-top:1px dashed var(--line);margin-top:6px;padding-top:14px}
+.filter-label{flex:0 0 132px;padding-top:4px}
+.filter-label b{display:block;font-size:13px;color:var(--ink);font-weight:700}
+.filter-label small{display:block;font-size:11px;color:var(--muted);margin-top:2px;line-height:1.4}
+.filter-opts{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.filter-opts button{background:var(--bg);border:1px solid var(--line);border-radius:9px;padding:6px 12px;font-size:13px;color:var(--muted);display:inline-flex;align-items:center;gap:7px;transition:all .15s;cursor:pointer}
+.filter-opts button:hover{border-color:#9db8e8;color:var(--ink)}
+.filter-opts button[aria-selected=true]{background:var(--blue);border-color:var(--blue);color:#fff;font-weight:700}
+.filter-opts button[aria-selected=true].disk-selected{background:#2054be;border-color:#2054be}
+.filter-opts button .badge{min-width:20px;height:20px;padding:0 6px;border-radius:10px;background:#e9eef6;color:#4a5b70;font-size:11px;font-weight:700;line-height:20px;text-align:center}
+.filter-opts button[aria-selected=true] .badge{background:rgba(255,255,255,.24);color:#fff}
+.filter-opts button .badge.warn{background:#fde3e1;color:#c62828}
+.filter-opts button[aria-selected=true] .badge.warn{background:rgba(255,255,255,.24);color:#fff}
+.filter-opts button svg{width:15px;height:15px;vertical-align:-3px}
+.filter-hint{font-size:11px;color:var(--muted);margin-top:8px;padding-top:8px;border-top:1px dashed var(--line)}
+.batch-fold{margin:12px 0;border:1px solid var(--line);border-radius:10px;background:var(--surface)}
+.batch-fold summary{padding:10px 14px;font-size:13px;color:var(--blue);font-weight:700;cursor:pointer;list-style:none}
+.batch-fold summary::-webkit-details-marker{display:none}
+.batch-fold summary::before{content:'▸';display:inline-block;margin-right:8px;transition:transform .15s}
+.batch-fold[open] summary::before{transform:rotate(90deg)}
+.batch-fold summary small{color:var(--muted);font-weight:400;margin-left:6px}
+.batch-fold .batchbar{margin:0;border:0;border-top:1px solid var(--line);border-radius:0 0 10px 10px;background:transparent}
+@media(max-width:720px){.filter-row{flex-direction:column;gap:6px}.filter-label{flex:auto;padding-top:0}.filter-label small{display:inline;margin-left:6px}}
 /* 决策控件：动作 / 目标盘 / 批量工具条 */
 .row>.decision-controls{display:flex;gap:14px;flex-wrap:wrap;align-items:center;margin:0 18px 12px;padding-top:2px}
 .decision-controls label{font-size:12px;color:var(--muted);display:inline-flex;align-items:center;gap:5px}
@@ -86,7 +103,14 @@ header .finish-btn:disabled{background:rgba(255,255,255,.16);color:#a9bdd6;curso
 .chip.skip{background:#fff2e4;color:#a55b12}
 .chip.wait{background:#eef1f6;color:#5a6b80}
 .chip.act{background:#e8f0ff;color:#2054be}
-nav{display:flex;gap:18px;border-bottom:1px solid var(--line);margin-bottom:16px;overflow:auto}
+nav{display:flex;gap:18px;border-bottom:1px solid var(--line);margin-bottom:16px;overflow:auto;
+  position:sticky;top:65px;z-index:4;background:var(--bg);padding-top:2px}
+/* 长列表回到顶部：滚动超过一屏后出现 */
+.to-top{position:fixed;right:22px;bottom:86px;z-index:6;width:44px;height:44px;border-radius:50%;
+  border:1px solid var(--line);background:var(--surface);color:var(--ink);font-size:18px;line-height:1;
+  cursor:pointer;box-shadow:0 6px 18px rgba(16,30,50,.16);display:none;align-items:center;justify-content:center}
+.to-top[data-show=true]{display:flex}
+.to-top:hover{border-color:var(--blue);color:var(--blue)}
 nav button{background:none;border:0;border-bottom:3px solid transparent;border-radius:0;white-space:nowrap;padding:9px 1px}
 nav button[aria-selected=true]{color:var(--blue);border-color:var(--blue);font-weight:700}
 .panel{background:var(--surface);border:1px solid var(--line);border-radius:12px;overflow:hidden}
@@ -109,6 +133,23 @@ summary{width:fit-content;color:var(--blue);cursor:pointer;font-size:13px}
 .more-findings{margin:10px 18px}
 .more-findings .finding{padding-inline:0}
 .scan-coverage{margin:0 0 12px;padding:10px 14px;background:var(--soft);border-radius:8px}
+.term-box{margin:0 0 12px;border:1px solid #dce7f7;background:#f6f9fe;border-radius:10px}
+.term-box>summary{cursor:pointer;padding:11px 14px;font-size:13px;font-weight:700;color:var(--blue);list-style:none}
+.term-box>summary::-webkit-details-marker{display:none}
+.term-box>summary:before{content:'▸ ';font-weight:700}
+.term-box[open]>summary:before{content:'▾ '}
+.term-body{padding:0 14px 12px;font-size:12.5px;color:var(--muted);line-height:1.7}
+.term-body p{margin:7px 0}
+.term-body b{color:var(--ink)}
+.purpose-tag{display:inline-block;font-size:11px;color:#5a4a8a;background:#f0ecfa;border:1px solid #ddd4f2;padding:1px 7px;border-radius:6px;vertical-align:1px;margin-left:5px}
+.status-tag{display:inline-block;font-size:11px;padding:1px 7px;border-radius:6px;margin-right:4px}
+.status-tag.can-move{color:#0f6e56;background:#e1f5ee;border:1px solid #9fe1cb}
+.status-tag.can-handle{color:#185fa5;background:#e6f1fb;border:1px solid #b5d4f4}
+.status-tag.protected{color:#993c1d;background:#faece7;border:1px solid #f5c4b3}
+.status-tag.observe{color:#5f5e5a;background:#f1efe8;border:1px solid #d3d1c7}
+.kids-hint{color:#8892a6;font-size:11.5px;margin-top:2px}
+.name-zh{display:block;font-size:12px;color:#5b6b82;margin-top:2px}
+.danger-tag{display:inline-block;font-size:11.5px;color:#a32d2d;background:#fcebeb;border:1px solid #f7c1c1;padding:2px 8px;border-radius:6px;margin-top:4px}
 /* 占用构成：空间去哪了 */
 .composition{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:16px 18px;margin:0 0 16px}
 .composition h2{font-size:16px;display:flex;align-items:center;gap:8px}
@@ -187,6 +228,7 @@ button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible,su
   <div><strong id="selection" aria-live="polite">尚未选择</strong><small id="export-status">选择将返回发起本轮任务的 WorkBuddy 对话。</small></div>
   <button class="primary" type="button" id="submit" disabled>交给 WorkBuddy 执行</button>
 </div></footer>
+<button class="to-top" type="button" id="to-top" data-show="false" aria-label="回到顶部" title="回到顶部">↑</button>
 <div class="toast" id="toast" role="status" aria-live="polite" hidden><span class="toast-ico" id="toast-ico"></span><div><strong id="toast-title"></strong><p id="toast-message"></p></div><button type="button" id="toast-close" aria-label="关闭提示">×</button></div>
 <div class="dialog-mask" id="dialog-mask" hidden>
   <div class="dialog" role="alertdialog" aria-modal="true" aria-labelledby="dialog-title" aria-describedby="dialog-message">
@@ -210,7 +252,8 @@ const size = bytes => {
 };
 const signed = bytes => Number.isFinite(bytes) ? (bytes >= 0 ? '+' : '−') + size(Math.abs(bytes)) : '待测';
 const localTime = time => time ? time.replace('T', ' ') : '时间未知';
-const actionName = {'read-space':'读取磁盘余量',recycle:'清空回收站','recycle-review':'核实后清空该盘回收站',uninstall:'卸载软件',migrate:'迁移数据','app-clean':'清理应用存储',system:'调整系统设置'};
+// 兼容旧引用；真正唯一的动作命名源是下面的 ACTION_LABELS（在 ICON 之后定义）。
+let actionName = {};
 // 矢量小图标（内联 SVG，避免 emoji，缩放清晰）
 const ICON = {
   broom:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 4l-8 8M14 3l7 7M11 12l-7 8 3 1 1 2 2-1 1-3 3-2z"/></svg>',
@@ -250,6 +293,31 @@ function openDialog(kind, title, message, details) {
   get('dialog-ok').focus();
 }
 function closeDialog() { get('dialog-mask').hidden = true; }
+// 让现有对话框临时变成"确认/取消"双按钮；返回 Promise<boolean>
+function confirmDialog(kind, title, message, details, okText, cancelText) {
+  return new Promise(resolve => {
+    openDialog(kind, title, message, details);
+    const ok = get('dialog-ok');
+    const mask = get('dialog-mask');
+    const cancel = document.createElement('button');
+    cancel.type = 'button';
+    cancel.className = 'ghost';
+    cancel.textContent = cancelText || '取消';
+    cancel.style.marginLeft = '8px';
+    ok.textContent = okText || '确认执行';
+    ok.after(cancel);
+    const finish = value => {
+      ok.textContent = '知道了';
+      cancel.remove();
+      mask.hidden = true;
+      ok.onclick = null;
+      cancel.onclick = null;
+      resolve(value);
+    };
+    ok.onclick = () => finish(true);
+    cancel.onclick = () => finish(false);
+  });
+}
 function pathKey(raw) { return String(raw || '').replace(/\//g, '\\').toLowerCase().replace(/\\+$/, ''); }
 function overlappingPairs() {
   const rows = new Map(run.found.map(row => [row.id, row]));
@@ -264,15 +332,26 @@ function overlappingPairs() {
   }
   return pairs;
 }
-// 决策分类：把动作归入「清理 / 搬迁 / 卸载 / 系统」四类，便于分别处理
+// 动作的统一叫法：筛选按钮、每条的下拉、卡片标签全部用这一套，避免两套词混淆。
+const ACTION_LABELS = {
+  migrate:'搬迁到空闲盘', recycle:'清空回收站', 'recycle-review':'清空回收站',
+  'app-clean':'应用内清理', uninstall:'卸载软件', system:'系统调整',
+  'read-space':'读取磁盘余量', skip:'本轮跳过', delete:'直接清理（永久删除）'
+};
+// 决策分类：按「用户当前决定」归类（不是 AI 原建议），改动作后筛选实时跟随。
 const CATEGORIES = [
-  {key:'clean',   label:'清理',   icon:ICON.broom, actions:['recycle','recycle-review','app-clean']},
   {key:'migrate', label:'搬迁',   icon:ICON.box,   actions:['migrate']},
-  {key:'uninstall',label:'卸载',  icon:ICON.trash, actions:['uninstall']},
+  {key:'clean',   label:'清理',   icon:ICON.broom, actions:['recycle','recycle-review','app-clean','delete']},
   {key:'system',  label:'系统调整',icon:ICON.gear,  actions:['system','read-space']},
+  {key:'uninstall',label:'卸载',  icon:ICON.trash, actions:['uninstall']},
+  {key:'skip',    label:'已跳过', icon:ICON.x,     actions:['skip']},
 ];
 const categoryOf = action => (CATEGORIES.find(c => c.actions.includes(action)) || {key:'other'}).key;
+// 一条建议当前所属分类，以用户决定为准。
+const categoryOfProposal = p => categoryOf((decisions.get(p.id) || {}).action || p.recommendedAction || p.action);
+actionName = ACTION_LABELS;
 let activeCategory = 'all';
+let activeDisk = 'all';
 const selectedIds = new Set();
 // 每项用户的最终决策：{action, targetDisk}；缺省取 AI 建议
 const decisions = new Map();
@@ -298,7 +377,8 @@ function setDecision(id, patch) {
   decisions.set(id, cur);
   // 动作为 skip 视为不处理，取消勾选
   if (cur.action === 'skip') selectedIds.delete(id); else selectedIds.add(id);
-  paintDecisionRows(new Map((run.found || []).map(r => [r.id, r])));
+  if (!run.deep && run.proposals.length) renderDecisions();  // 改动作后分类归属变化，筛选联动刷新
+  else paintDecisionRows(new Map((run.found || []).map(r => [r.id, r])));
   selectionSummary();
 }
 
@@ -364,12 +444,36 @@ function findings() {
   const disk = get('disk').value;
   const found = run.found.filter(row => (!disk || row.disk === disk)
     && (row.name + ' ' + row.path).toLowerCase().includes(query));
-  const renderRow = row => '<div class="finding">'
-    + '<div><span class="name">' + escape(row.name) + '</span><br><small>' + escape(row.path)
-    + '</small></div><span class="number">' + (row.pending || row.errors ? '≥ ' : '') + size(row.bytes)
-    + '</span><small>' + escape(row.coverage) + (row.pending ? ' · 扫描未完成' : '')
-    + (row.errors ? ' · 未读取 ' + row.errors + ' 处' : '')
-    + (row.links ? ' · 跳过重解析项或重复硬链接 ' + row.links + ' 处' : '') + '</small></div>';
+  // 发现项 → 它在决策清单里的建议（用于标注"能不能搬、搬到哪"）
+  const proposalById = new Map((run.proposals || []).map(p => [p.id, p]));
+  const renderRow = row => {
+    const p = proposalById.get(row.id);
+    const purpose = row.purpose || row.kindName || '';
+    const purposeTag = purpose && purpose !== '一般数据目录'
+      ? '<span class="purpose-tag">' + escape(purpose) + '</span>' : '';
+    const kids = row.childrenHint || [];
+    const kidsHint = kids.length
+      ? '<br><small class="kids-hint">内含：' + kids.map(escape).join('、') + (kids.length >= 5 ? ' …' : '') + '</small>' : '';
+    let statusTag;
+    if (p && p.action === 'migrate') {
+      statusTag = '<span class="status-tag can-move">可搬迁 → ' + escape(p.targetDisk || '待选') + ' 盘</span>';
+    } else if (p) {
+      statusTag = '<span class="status-tag can-handle">已在「待你决定」· ' + escape(actionName[p.action] || p.action) + '</span>';
+    } else if (row.kind === 'system' || row.kindName === '系统') {
+      statusTag = '<span class="status-tag protected">系统/软件目录 · 不建议动</span>';
+    } else {
+      statusTag = '<span class="status-tag observe">仅展示 · 本轮不处理</span>';
+    }
+    const nameZh = row.nameZh
+      ? '<span class="name-zh">' + escape(row.nameZh) + '</span>' : '';
+    return '<div class="finding">'
+      + '<div><span class="name">' + escape(row.name) + '</span> ' + purposeTag + nameZh
+      + '<br><small>' + escape(row.path)
+      + '</small>' + kidsHint + '</div><span class="number">' + (row.pending || row.errors ? '≥ ' : '') + size(row.bytes)
+      + '</span><small>' + statusTag + ' · ' + escape(row.coverage) + (row.pending ? ' · 扫描未完成' : '')
+      + (row.errors ? ' · 未读取 ' + row.errors + ' 处' : '')
+      + (row.links ? ' · 跳过重解析项或重复硬链接 ' + row.links + ' 处' : '') + '</small></div>';
+  };
   const sections = run.targets.map(target => {
     const items = found.filter(row => row.disk === target);
     if (!items.length) return '';
@@ -404,26 +508,54 @@ function renderDecisions() {
   }
   updateDecisionDot(run.proposals.length);
 
-  // 按分类统计数量
+  const diskRows = new Map((run.found || []).map(r => [r.id, r]));
+  const proposalDisk = p => (diskRows.get(p.id) || {}).disk || p.sourceDisk || '';
   const counts = {all:run.proposals.length};
-  CATEGORIES.forEach(c => counts[c.key] = run.proposals.filter(p => categoryOf(p.action) === c.key).length);
-  const catbar = '<div class="catbar" role="tablist" aria-label="决策分类">'
-    + '<button type="button" role="tab" data-cat="all" aria-selected="' + (activeCategory === 'all')
-    + '">全部<span class="badge' + (counts.all > 0 ? ' warn' : '') + '">' + counts.all + '</span></button>'
-    + CATEGORIES.filter(c => counts[c.key] > 0).map(c =>
+  CATEGORIES.forEach(c => counts[c.key] = run.proposals.filter(p => categoryOfProposal(p) === c.key).length);
+
+  // 两维联动：每个维度的可选项，只列在"另一维度当前选择"下确实存在的项。
+  // 若切换后另一维度的当前值已无结果，自动回退到"全部"，避免出现空列表死角。
+  const inDisk = p => activeDisk === 'all' || proposalDisk(p) === activeDisk;
+  const inCat = p => activeCategory === 'all' || categoryOfProposal(p) === activeCategory;
+  if (activeCategory !== 'all' && !run.proposals.some(p => categoryOfProposal(p) === activeCategory && inDisk(p))) {
+    activeCategory = 'all';
+  }
+  if (activeDisk !== 'all' && !run.proposals.some(p => proposalDisk(p) === activeDisk && inCat(p))) {
+    activeDisk = 'all';
+  }
+  // 分类按钮的数量 = 在当前磁盘下的条数（磁盘=全部时就是全量）
+  const catCounts = {};
+  CATEGORIES.forEach(c => catCounts[c.key] = run.proposals.filter(p =>
+    categoryOfProposal(p) === c.key && inDisk(p)).length);
+  const catOpts = '<button type="button" role="tab" data-cat="all" aria-selected="' + (activeCategory === 'all')
+    + '">全部<span class="badge' + (catCounts.all > 0 ? ' warn' : '') + '">' + run.proposals.filter(inDisk).length + '</span></button>'
+    + CATEGORIES.filter(c => catCounts[c.key] > 0).map(c =>
         '<button type="button" role="tab" data-cat="' + c.key + '" aria-selected="'
         + (activeCategory === c.key) + '">' + c.icon + c.label
-        + '<span class="badge">' + counts[c.key] + '</span></button>').join('')
-    + '</div>';
+        + '<span class="badge">' + catCounts[c.key] + '</span></button>').join('');
+  // 磁盘按钮的数量 = 在当前分类下的条数（分类=全部时就是全量）
+  const diskCounts = {};
+  run.proposals.forEach(p => {
+    if (!inCat(p)) return;
+    const d = proposalDisk(p);
+    if (d) diskCounts[d] = (diskCounts[d] || 0) + 1;
+  });
+  const diskKeys = Object.keys(diskCounts).sort();
+  const diskOpts = diskKeys.length
+    ? ['all', ...diskKeys].map(d =>
+        '<button type="button" role="tab" class="disk-selected" data-disk-filter="' + d + '" aria-selected="'
+        + (activeDisk === d) + '">' + (d === 'all' ? '全部磁盘' : d + ' 盘')
+        + '<span class="badge">' + (d === 'all' ? run.proposals.filter(inCat).length : diskCounts[d]) + '</span></button>').join('')
+    : '';
   // 初始化每项默认决策（不覆盖用户已有选择）
   run.proposals.forEach(p => decisionOf(p.id));
-  const batchbar = '<div class="batchbar"><span class="batch-scope">批量设置</span>'
-    + '<label>范围 <select id="batch-scope"><option value="category">当前分类</option>'
-    + '<option value="selected">已勾选</option><option value="all">全部项目</option></select></label>'
-    + '<label>动作 <select id="batch-action"><option value="">— 不改 —</option>'
+  const batchInner = '<div class="batchbar">'
+    + '<label>作用范围 <select id="batch-scope"><option value="category">当前筛选结果</option>'
+    + '<option value="selected">已勾选的项</option><option value="all">全部项目</option></select></label>'
+    + '<label>设为动作 <select id="batch-action"><option value="">— 不改 —</option>'
     + '<option value="migrate">搬迁</option><option value="app-clean">应用内清理</option>'
     + '<option value="skip">跳过</option></select></label>'
-    + '<label>目标盘 <select id="batch-disk"><option value="">— 不改 —</option>'
+    + '<label>搬迁目标盘 <select id="batch-disk"><option value="">— 不改 —</option>'
     + (() => {
         const disks = new Set();
         run.proposals.forEach(p => (p.targetDisks || []).forEach(d => disks.add(d)));
@@ -431,15 +563,29 @@ function renderDecisions() {
       })()
     + '</select></label><button type="button" id="batch-apply">应用</button>'
     + '<button type="button" id="batch-clear">全部取消</button></div>';
-  get('decisions').innerHTML = '<p>逐项决定处理方式，或用批量工具一次设置；未勾选的项目本轮不处理。共 <b>' + counts.all + '</b> 项待决定。</p>'
-    + catbar + batchbar + '<div id="decision-rows"></div>';
+  const batchFold = '<details class="batch-fold"><summary>批量设置（可选）<small>一次给多项设同一个动作/目标盘，不想逐项点时可展开</small></summary>'
+    + batchInner + '</details>';
+  const filterCard = '<div class="filter-card">'
+    + '<div class="filter-row"><div class="filter-label"><b>① 看哪类处理</b><small>按你决定的动作筛选</small></div>'
+    + '<div class="filter-opts">' + catOpts + '</div></div>'
+    + '<div class="filter-row"><div class="filter-label"><b>② 看哪个盘</b><small>按文件所在盘筛选</small></div>'
+    + '<div class="filter-opts">' + diskOpts + '</div></div>'
+    + '<div class="filter-hint"><b>筛选 ≠ 处理</b>：上面两行只改变"显示哪些项"，可以叠加（如「搬迁 + D 盘」）。'
+    + '真正要处理哪些，只看下面每行的<b>勾选框</b>——勾选=处理，不勾=本轮跳过。改了某项的「你的决定」，它会自动归到新类别。</div>'
+    + '</div>';
+  get('decisions').innerHTML = '<p>共 <b>' + counts.all + '</b> 项待你决定。先用上面两步定位，再逐项勾选；AI 只是建议，最终按你的勾选和决定执行。</p>'
+    + filterCard + batchFold + '<div id="decision-rows"></div>';
   paintDecisionRows(rows);
   get('decisions').querySelectorAll('[data-cat]').forEach(button => {
     button.addEventListener('click', () => {
       activeCategory = button.dataset.cat;
-      get('decisions').querySelectorAll('[data-cat]').forEach(b =>
-        b.setAttribute('aria-selected', String(b === button)));
-      paintDecisionRows(rows);
+      renderDecisions();  // 整体重绘：另一维度的可选项随之联动更新
+    });
+  });
+  get('decisions').querySelectorAll('[data-disk-filter]').forEach(button => {
+    button.addEventListener('click', () => {
+      activeDisk = button.dataset.diskFilter;
+      renderDecisions();  // 整体重绘：另一维度的可选项随之联动更新
     });
   });
   bindDecisionControls(rows);
@@ -468,9 +614,17 @@ function bindDecisionControls(rows) {
   });
 }
 
+function diskOfProposal(p) {
+  const row = (run.found || []).find(r => r.id === p.id);
+  return (row && row.disk) || p.sourceDisk || '';
+}
+function matchesFilter(p) {
+  const catOk = activeCategory === 'all' || categoryOfProposal(p) === activeCategory;
+  const diskOk = activeDisk === 'all' || diskOfProposal(p) === activeDisk;
+  return catOk && diskOk;
+}
 function visibleProposalIds() {
-  return run.proposals.filter(p => activeCategory === 'all' || categoryOf(p.action) === activeCategory)
-    .map(p => p.id);
+  return run.proposals.filter(matchesFilter).map(p => p.id);
 }
 
 function applyBatch(rows) {
@@ -500,9 +654,9 @@ function applyBatch(rows) {
 }
 
 function paintDecisionRows(rows) {
-  const list = run.proposals.filter(p => activeCategory === 'all' || categoryOf(p.action) === activeCategory);
+  const list = run.proposals.filter(matchesFilter);
   if (!list.length) {
-    get('decision-rows').innerHTML = '<div class="panel cat-empty">这一类当前没有待决定项目。</div>';
+    get('decision-rows').innerHTML = '<div class="panel cat-empty">当前筛选条件下没有待决定项目，请换一个分类或磁盘。</div>';
     return;
   }
   get('decision-rows').innerHTML = '<div class="panel">'
@@ -515,7 +669,10 @@ function paintDecisionRows(rows) {
       const autoTag = p.auto ? '<span class="auto-tag">自动识别</span>' : '';
       const appTag = p.needAppReset
         ? '<div><span class="app-tag">迁移后需在应用设置里改存储位置</span></div>' : '';
-      const cat = CATEGORIES.find(c => c.key === categoryOf(p.action));
+      // 用户选了"直接清理"时给出不可逆警示（默认不会出现，必须主动切换）
+      const deleteTag = dec.action === 'delete'
+        ? '<div><span class="danger-tag">将永久删除，不可恢复 · 提交时会再次确认</span></div>' : '';
+      const cat = CATEGORIES.find(c => c.key === categoryOfProposal(p));
       const catTag = '<span class="chip act">' + (cat ? cat.icon + cat.label : escape(actionName[p.action])) + '</span> ';
       // 动作下拉：仅在后端给定的白名单内可选
       const acts = allowedActions(p).map(a =>
@@ -527,12 +684,14 @@ function paintDecisionRows(rows) {
       if (dec.action === 'migrate' && Array.isArray(p.targetDisks) && p.targetDisks.length) {
         const opts = p.targetDisks.map(d =>
           '<option value="' + d + '"' + (d === dec.targetDisk ? ' selected' : '') + '>' + d + ' 盘</option>').join('');
-        diskSel = '<label>搬到 <select data-disk="' + escape(p.id) + '"' + (locked ? ' disabled' : '')
+        diskSel = '<label>搬到目标盘 <select data-disk="' + escape(p.id) + '"' + (locked ? ' disabled' : '')
           + '>' + opts + '</select></label>';
       }
       return '<article class="row"><div class="decision-main"><div><div class="name">' + row.disk
-        + ' 盘 · ' + escape(row.name) + '</div><small>' + (row.pending || row.errors ? '已读取部分 ' : '当前记录 ') + size(row.bytes) + '</small></div>'
-        + '<div class="description"><b>' + catTag + autoTag + escape(actionName[p.action]) + '</b>' + appTag + '<p>'
+        + ' 盘 · ' + escape(row.name) + '</div>'
+        + (row.nameZh ? '<span class="name-zh">' + escape(row.nameZh) + '</span>' : '')
+        + '<small>' + (row.pending || row.errors ? '已读取部分 ' : '当前记录 ') + size(row.bytes) + '</small></div>'
+        + '<div class="description"><b>' + catTag + autoTag + escape(actionName[dec.action] || dec.action) + '</b>' + appTag + deleteTag + '<p>'
         + escape(p.recommendation) + '</p><small class="impact">' + escape(p.impact) + '</small></div>'
         + '<span class="number">' + size(p.estimate) + '</span>'
         + '<label class="checkbox"><input type="checkbox" value="' + escape(p.id) + '"'
@@ -620,11 +779,13 @@ function updateVolumes(data) {
   }).join('');
 }
 
+let statusFailures = 0;
 async function readStatus() {
   try {
     const response = await fetch('status', {cache:'no-store'});
     const data = await response.json();
     if (!response.ok) throw new Error(data.error || '连接失效');
+    statusFailures = 0;
     const phase = get('phase-pill');
     if (phase) {
       phase.hidden = false;
@@ -653,8 +814,15 @@ async function readStatus() {
     }
     setTimeout(readStatus, 2000);
   } catch {
-    get('export-status').textContent = '连接中断。请回到原对话查看回执或重新打开本轮工作台。';
-    if (get('dialog-mask').hidden) notify('err', '工作台连接中断', '实时状态读取失败。请回到原对话查看回执，或重新打开本轮工作台后再提交。');
+    statusFailures++;
+    if (statusFailures <= 3) {
+      // 偶发抖动：静默重试，别急着弹"连接中断"吓人
+      setTimeout(readStatus, 1500 * statusFailures);
+      return;
+    }
+    // 连续失败才判定真中断，并给一条可操作的引导
+    get('export-status').textContent = '连接中断。请回到原对话，让助手重新打开本轮工作台后再提交（你已勾选的选择不会保存在此页面）。';
+    if (get('dialog-mask').hidden) notify('err', '工作台连接中断', '实时状态读取失败。请回到原对话，让助手重新打开本轮工作台；若已提交请直接回「已提交」。');
   }
 }
 
@@ -688,11 +856,30 @@ async function submitSelection() {
     get('export-status').textContent = '已阻止提交：存在重叠目标。';
     return;
   }
+  // 有"直接清理（永久删除）"时，必须二次确认——不可逆操作，绝不清描淡写。
+  const deletable = ids.map(id => ({id, d: decisionOf(id), p: proposalById(id)}))
+    .filter(x => x.d.action === 'delete');
+  if (deletable.length) {
+    const total = deletable.reduce((sum, x) => sum + ((x.p && x.p.estimate) || 0), 0);
+    const detail = deletable.slice(0, 6).map(x => {
+      const row = (run.found || []).find(r => r.id === x.id) || {};
+      return (row.disk || '') + ' 盘 · ' + (row.name || '') + '（' + (row.path || '') + '）';
+    });
+    if (deletable.length > 6) detail.push('另有 ' + (deletable.length - 6) + ' 项未列出');
+    const okDelete = await confirmDialog('warn', '确认永久删除这些目录？',
+      '共 ' + deletable.length + ' 项、约 ' + size(total) + '。删除后无法恢复，不进回收站，也不会先备份。',
+      detail, '确认永久删除', '取消');
+    if (!okDelete) {
+      get('export-status').textContent = '已取消提交：你取消了永久删除确认。';
+      return;
+    }
+  }
   // 每项勾选带上用户的最终动作与目标盘；decisionDigest 由服务端生成，前端不伪造。
   const decisions = ids.map(id => {
     const d = decisionOf(id);
     const item = {id, action: d.action};
     if (d.action === 'migrate' && d.targetDisk) item.targetDisk = d.targetDisk;
+    if (d.action === 'delete') item.confirmDelete = true;
     return item;
   });
   const payload = JSON.stringify({runId:run.runId, revision:run.revision, ids, decisions});
@@ -737,11 +924,28 @@ if (!run) {
       + '</small></div>';
   }).join('');
   const partial = run.found.filter(row => row.pending || row.errors).length;
-  if (run.scanTime || partial) {
-    get('coverage').innerHTML = '<div class="scan-coverage"><small>' + (run.scanTime
-      ? '占用扫描 ' + escape(localTime(run.scanTime)) : '占用扫描')
-      + (partial ? ' · ' + partial + ' 项只取得部分读数，列表已标注' : '') + '</small></div>';
-  }
+  const inDecision = new Set((run.proposals || []).map(p => p.id));
+  const notInDecision = run.found.filter(r => !inDecision.has(r.id)).length;
+  const termBox = '<details class="term-box"><summary>这些名词是什么意思？为什么有些项目没进「待你决定」？</summary>'
+    + '<div class="term-body">'
+    + '<p><b>逻辑大小</b>：把目录里每个文件的大小加起来的总数，'
+    + '还没扣除硬链接/系统复用，所以它常常<b>大于</b>磁盘实际减少的空间。用于排序找大项，不代表能释放这么多。</p>'
+    + '<p><b>自动识别</b>：这条是脚本扫描时自己发现的，不是人工补进去的。</p>'
+    + '<p><b>只取得部分读数 / 未读取 N 处</b>：遇到权限不足或被程序占用的文件，读不全。'
+    + '显示的带「≥」号，表示"至少有这么大"，实际可能更多。</p>'
+    + '<p><b>为什么这里 ' + partial + ' 项标了部分读数、' + notInDecision + ' 项没进「待你决定」</b>：'
+    + '本页列出的是<b>所有扫到的东西</b>，包括系统目录（Windows、Users、Program Files）、软件安装目录、'
+    + '以及小于阈值的零碎目录。这些<b>不能搬也不该删</b>——搬走系统或软件目录会让电脑坏掉，'
+    + '所以只在这里展示、不进决策清单。真正可以处理的项已按安全规则筛选到「待你决定」，需要你勾选才执行。</p>'
+    + '<p><b>C 盘的 AI 应用（Docker、豆包、微信等）能不能搬？</b>能——它们的应用数据目录会下钻出来，'
+    + '<b>标着「可搬迁 → X 盘」</b>并进入「待你决定」。但注意：标「系统/软件目录 · 不建议动」的是 '
+    + 'Program Files、Windows 这类安装目录，搬走会让软件失效，所以不进清单。搬应用数据前，'
+    + '记得先在应用设置里改存储位置。</p>'
+    + '<p>简单说：<b>全部发现 = 看到了什么；待你决定 = 能安全动什么</b>。两者数量不一样是正常的。</p>'
+    + '</div></details>';
+  get('coverage').innerHTML = termBox + '<div class="scan-coverage"><small>' + (run.scanTime
+    ? '占用扫描 ' + escape(localTime(run.scanTime)) : '占用扫描')
+    + (partial ? ' · ' + partial + ' 项只取得部分读数，列表已标注' : '') + '</small></div>';
   renderComposition();
   run.targets.forEach(disk => get('disk').add(new Option(disk + ' 盘', disk)));
   renderDecisions();
@@ -793,6 +997,12 @@ if (!run) {
   get('toast-close').addEventListener('click', () => { get('toast').hidden = true; });
   get('dialog-ok').addEventListener('click', closeDialog);
   get('dialog-mask').addEventListener('click', event => { if (event.target === get('dialog-mask')) closeDialog(); });
+  // 长列表辅助：滚动超过一屏显示"回到顶部"按钮
+  const toTop = get('to-top');
+  const syncToTop = () => { toTop.dataset.show = String(window.scrollY > 420); };
+  window.addEventListener('scroll', syncToTop, { passive: true });
+  toTop.addEventListener('click', () => window.scrollTo({ top: 0, behavior: 'smooth' }));
+  syncToTop();
   if (run.liveReview) { get('live-badge').hidden = false; readStatus(); }
   if (!run.liveReview && !run.reviewUrl && run.mode === 'deep' && !run.deep) {
     lockSelection(true);

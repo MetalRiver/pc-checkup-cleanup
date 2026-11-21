@@ -391,8 +391,291 @@ USER_DIRS = {"downloads", "documents", "desktop", "pictures", "videos", "music",
 BIG_FILE_EXT = {".iso", ".img", ".zip", ".rar", ".7z", ".tar", ".gz", ".xz",
                 ".mp4", ".mkv", ".mov", ".avi", ".wmv", ".flv", ".vhd", ".vhdx",
                 ".vmdk", ".vdi", ".mdf", ".bak", ".dmp"}
+# 英文目录/文件名 → 中文含义。用于页面直接解释"这是什么"，避免用户只看到一堆英文。
+# 键统一小写匹配；同一名字在不同语境下含义相近，取最通用的解释。
+NAME_GLOSSARY = {
+    # 系统与用户目录
+    "windows": "Windows 系统目录（系统核心文件，不能搬）",
+    "users": "用户账户目录（每个账户的桌面/文档/应用数据都在这里）",
+    "program files": "64 位软件安装目录（搬走软件会打不开）",
+    "program files (x86)": "32 位软件安装目录（搬走软件会打不开）",
+    "programdata": "程序公共数据目录（多个软件共用的配置与缓存）",
+    "system volume information": "系统卷信息（还原点与索引，系统专用）",
+    "$recycle.bin": "回收站（删除的文件先放这里）",
+    "$winreagent": "Windows 更新残留（更新后遗留的临时文件）",
+    "recovery": "系统恢复分区数据",
+    "perflogs": "性能日志（系统性能记录）",
+    "pagefile.sys": "虚拟内存文件（内存不够时系统用它顶替）",
+    "swapfile.sys": "交换文件（配合虚拟内存的辅助文件）",
+    "hiberfil.sys": "休眠文件（保存休眠时的内存状态）",
+    "appdata": "应用数据（软件保存的配置、缓存和用户数据）",
+    "local": "本地应用数据（只在本机用，通常最大）",
+    "roaming": "漫游应用数据（可随账户同步）",
+    "locallow": "低权限应用数据（旧程序常用）",
+    "temp": "临时文件（可安全清理）",
+    "tmp": "临时文件（可安全清理）",
+    "cache": "缓存（应用可重建，通常可清）",
+    "caches": "缓存（应用可重建，通常可清）",
+    "logs": "日志文件（运行记录，一般可清）",
+    "log": "日志文件（运行记录，一般可清）",
+    "backup": "备份数据",
+    "backups": "备份数据",
+    "downloads": "下载（浏览器/软件下载的文件）",
+    "documents": "文档",
+    "desktop": "桌面",
+    "pictures": "图片",
+    "videos": "视频",
+    "music": "音乐",
+    "onedrive": "OneDrive 云同步目录",
+    "public": "公共账户目录（所有用户共享）",
+    "default": "系统默认用户模板",
+    # 开发相关
+    "node_modules": "Node.js 依赖包（可删，重新 npm install 会重建）",
+    ".git": "Git 版本库（删了会丢失提交历史）",
+    ".svn": "SVN 版本库",
+    "dist": "构建产物（可删，重新构建会生成）",
+    "build": "构建产物（可删，重新构建会生成）",
+    "out": "输出目录（编译/构建结果）",
+    "outputs": "输出目录（生成的结果文件）",
+    "target": "编译产物（Rust/Java 等构建输出）",
+    "bin": "可执行程序目录",
+    "obj": "编译中间文件（可删，会重新生成）",
+    "src": "源代码目录",
+    "source": "源代码目录",
+    "lib": "依赖库目录",
+    "vendor": "第三方依赖（项目自带的外部库）",
+    "assets": "静态资源（图片/字体/样式等）",
+    "static": "静态资源（不随程序变化的前端文件）",
+    "frontend": "前端代码（页面与交互）",
+    "backend": "后端代码（服务端逻辑）",
+    "fixtures": "测试固定数据（单元测试用的样本）",
+    "tests": "测试代码",
+    "test": "测试代码/测试数据",
+    "spec": "测试用例",
+    "docs": "文档",
+    "scripts": "脚本（自动化命令）",
+    "config": "配置文件",
+    "settings": "设置文件",
+    "data": "数据文件（程序运行的数据）",
+    "db": "数据库文件",
+    "database": "数据库文件",
+    "session": "会话数据（登录状态等临时信息）",
+    "pending": "待处理数据（尚未完成的队列）",
+    "installer.exe": "安装程序（装完可删）",
+    "installer": "安装程序（装完可删）",
+    "msi": "Windows 安装包（装完可删）",
+    "exe": "可执行程序",
+    "python": "Python 运行环境",
+    "pip": "Python 包管理器缓存（可清，会重新下载）",
+    "venv": "Python 虚拟环境（可删重建）",
+    ".venv": "Python 虚拟环境（可删重建）",
+    "mingw64": "MinGW 编译工具链（C/C++ 编译器）",
+    "cmake": "CMake 构建工具文件",
+    "gradle": "Gradle 构建缓存（可清，会重新下载）",
+    "maven": "Maven 依赖缓存（可清，会重新下载）",
+    "npm": "npm 包缓存（可清，会重新下载）",
+    "npm-cache": "npm 包缓存（可清，会重新下载）",
+    "yarn": "Yarn 包缓存（可清，会重新下载）",
+    "pnpm": "pnpm 包缓存（可清，会重新下载）",
+    "cargo": "Rust 包缓存（可清，会重新下载）",
+    "rustup": "Rust 工具链",
+    "nuget": "NuGet 包缓存（.NET）",
+    # 常见应用/厂商
+    "microsoft": "微软（Office/Edge/VS 等微软软件的数据）",
+    "nvidia": "NVIDIA 显卡驱动与缓存",
+    "tencent": "腾讯（QQ/微信/游戏等数据）",
+    "steam": "Steam 游戏平台（游戏本体与存档）",
+    "epic games": "Epic 游戏平台",
+    "doubao": "豆包（字节跳动 AI 助手）",
+    "kingsoft": "金山（WPS 等办公软件）",
+    "quark": "夸克（浏览器/网盘）",
+    "quarkclouddrive": "夸克网盘",
+    "codex": "Codex（AI 编程工具）",
+    "zcode": "ZCode（AI 编程工具）",
+    "trae cn": "Trae 国内版（AI 编程工具）",
+    "wemeet": "腾讯会议",
+    "edge": "Microsoft Edge 浏览器",
+    "docker": "Docker 容器数据（镜像与容器，可清理无用镜像）",
+    "user data": "用户数据（软件保存的个人数据）",
+    "msi center": "微星 MSI Center（主板/笔记本控制软件）",
+    "soft": "软件目录",
+    "program": "程序目录",
+    "programs": "程序目录",
+    "app": "应用目录",
+    "apps": "应用目录",
+    "tools": "工具软件目录",
+    "utils": "工具软件目录",
+    "plugins": "插件目录",
+    "extensions": "扩展插件",
+    "skins": "皮肤/主题",
+    "themes": "主题",
+    "fonts": "字体文件",
+    "driver": "驱动程序",
+    "drivers": "驱动程序",
+    "update": "更新包（安装后一般可删）",
+    "updates": "更新包（安装后一般可删）",
+    "installer_download": "安装包下载目录",
+    "temp files": "临时文件（可安全清理）",
+    "inetpub": "IIS 网站根目录（Windows 自带的 Web 服务）",
+    "onedrivetemp": "OneDrive 临时文件（同步中的缓存）",
+    "swdist": "Windows 分发包数据",
+    "assembly": ".NET 程序集缓存",
+    "catroot": "驱动签名目录（系统专用的数字签名库）",
+    "driverstore": "驱动仓库（系统安装过的所有驱动）",
+    "winsxs": "组件存储（系统更新留下的旧版本组件）",
+    "syswow64": "32 位兼容层（让 32 位程序能在 64 位系统跑）",
+    "system32": "系统核心程序（不能动）",
+    "servicing": "系统维护组件",
+    "winevt": "Windows 事件日志",
+    "softwaredistribution": "Windows 更新缓存（可清理）",
+    "deliveryoptimization": "更新分发缓存（可清理）",
+    "prefetch": "预读文件（加速程序启动，可清）",
+    "crashdumps": "崩溃转储（程序崩溃时的记录，可清）",
+    "wer": "错误报告缓存（可清）",
+    "explorer": "资源管理器缓存（缩略图/图标）",
+    "d3dscache": "DirectX 着色器缓存（可清，会重建）",
+    # 常见软件（英文名 → 中文说明）
+    "qq": "QQ（腾讯即时通讯）",
+    "qqnt": "QQ NT 版（新版 QQ 客户端）",
+    "weixin": "微信（腾讯）",
+    "xwechat": "微信新版客户端数据",
+    "xwechat_files": "微信聊天文件与图片",
+    "wps": "WPS Office（金山办公）",
+    "wps office": "WPS Office（金山办公）",
+    "chrome": "Google Chrome 浏览器",
+    "google": "Google（Chrome/更新器等）",
+    "googleupdater": "Chrome 更新程序缓存",
+    "edgecore": "Edge 浏览器内核",
+    "edgeupdate": "Edge 更新程序缓存",
+    "edgewebview": "Edge WebView（内嵌网页组件）",
+    "obsidian": "Obsidian 笔记软件",
+    "workbuddy": "WorkBuddy（当前这个 AI 助手）",
+    "codebuddy cn": "CodeBuddy 国内版（AI 编程工具）",
+    "qoder cn": "Qoder 国内版（AI 编程工具）",
+    "qodercn": "Qoder 国内版（AI 编程工具）",
+    "comate": "Comate（百度 AI 编程助手）",
+    "dify": "Dify（AI 应用开发平台）",
+    "openai": "OpenAI（Codex 等工具）",
+    "qianwen": "通义千问",
+    "qianwenapp": "通义千问客户端",
+    "minimax code": "MiniMax Code（AI 编程工具）",
+    "baidunetdisk": "百度网盘",
+    "telegram desktop": "Telegram 桌面版",
+    "sharex": "ShareX（截图/录屏工具）",
+    "dockerdesktop": "Docker Desktop（容器工具）",
+    "epicgameslauncher": "Epic 游戏启动器",
+    "epic online services": "Epic 在线服务组件",
+    "steamapps": "Steam 游戏安装目录",
+    "launcher": "启动器",
+    "saved": "存档（游戏/软件保存的进度）",
+    "game": "游戏数据",
+    "patch": "补丁/更新文件",
+    "tool": "工具",
+    "package": "软件包",
+    "wsl": "Windows 子系统 Linux（WSL）",
+    "wslsettings": "WSL 设置",
+    "ollama": "Ollama（本地大模型运行工具）",
+    "comfyui": "ComfyUI（AI 绘图工作流）",
+    "comfyui_windows_portable_nvidia_cu126.7z": "ComfyUI 便携版压缩包（可删或移走）",
+    "ffmpeg": "FFmpeg（音视频处理工具）",
+    "node": "Node.js 运行环境",
+    "git": "Git 版本控制工具",
+    "powershell": "PowerShell（命令行工具）",
+    "openssl-win64": "OpenSSL 加密库",
+    "libreoffice": "LibreOffice 办公套件",
+    "dotnet": ".NET 运行环境",
+    "microsoft visual studio": "Visual Studio 开发工具",
+    "visualstudio": "Visual Studio 开发工具",
+    "windows kits": "Windows SDK 开发工具包",
+    "windows defender": "Windows Defender 杀毒组件",
+    "windows defender advanced threat protection": "Windows Defender 高级威胁防护",
+    "systemapps": "系统应用（Windows 自带）",
+    "systemresources": "系统资源文件（不能删）",
+    "package cache": "安装包缓存（VS/系统安装器留下，可清）",
+    "administrator": "管理员账户目录",
+    "dnf": "DNF 游戏（地下城与勇士）",
+    "naraka": "永劫无间（游戏）",
+    "qqspeed_launcher": "QQ飞车启动器",
+    "shaders": "着色器（游戏图形渲染缓存）",
+    "sounds": "音效文件",
+    "userdata": "用户数据",
+    "releasephysx27": "PhysX 物理引擎运行库",
+    "releasephysx27_64": "PhysX 物理引擎运行库（64 位）",
+    "archives": "归档（备份/历史版本）",
+    "sub": "字幕文件",
+    "coldstart": "冷启动数据（首次启动的初始化文件）",
+    "evidence": "证据/记录数据",
+    "rc1-delivery": "候选发布交付物",
+    "test-deploy": "测试部署",
+    "sandbox": "沙盒（隔离测试环境）",
+    "hub": "中心仓库",
+    "shared": "共享数据",
+    "share": "共享数据",
+    "accounts": "账户信息",
+    "toolchain": "工具链",
+    "webstorage": "网页存储数据",
+    "cacheddata": "缓存数据",
+    "modulardata": "模块数据",
+    "partitions": "分区数据",
+    "htmlcache": "网页缓存",
+    "screenshots": "截图",
+    "binaries": "二进制程序文件",
+    "blobs": "二进制大对象（缓存/存储块）",
+    "projects": "项目目录",
+    "traces": "追踪记录（调试/性能日志）",
+    "huggingface": "HuggingFace 模型缓存",
+    "pypoetry": "Poetry（Python 依赖管理）缓存",
+    "uv": "uv（Python 包管理器）缓存",
+    ".pnpm-store": "pnpm 包缓存（可清，会重新下载）",
+    "packages": "软件包目录",
+    ".qq_dl_tmp": "QQ 下载临时文件（可清）",
+    "system.vhd": "系统虚拟硬盘文件",
+    "data1.vfs": "游戏数据包",
+    "res.vfs": "游戏资源包",
+}
+# 文件后缀的通用中文解释（目录名里带后缀时兜底说明）
+EXT_GLOSSARY = {
+    ".dll": "动态链接库（程序运行需要的组件）",
+    ".exe": "可执行程序",
+    ".sys": "系统驱动文件",
+    ".log": "日志文件（运行记录）",
+    ".tmp": "临时文件（一般可删）",
+    ".dat": "数据文件（程序私有格式）",
+    ".db": "数据库文件",
+    ".bak": "备份文件",
+    ".dmp": "崩溃转储（可删）",
+    ".iso": "光盘镜像文件（可删除或移走）",
+    ".zip": "压缩包",
+    ".rar": "压缩包",
+    ".msi": "Windows 安装包",
+    ".marker": "分区标记文件（系统用于识别分区）",
+}
+
+
+def zh_name(name):
+    """给英文目录/文件名一个中文解释；中文名或未收录的返回空串。"""
+    key = str(name or "").strip().casefold()
+    if not key:
+        return ""
+    if key in NAME_GLOSSARY:
+        return NAME_GLOSSARY[key]
+    # 去掉扩展名再试一次（installer.exe → installer）
+    stem, dot, ext = key.rpartition(".")
+    if dot and stem and stem in NAME_GLOSSARY:
+        return NAME_GLOSSARY[stem]
+    # 仍未收录：按文件后缀给通用解释，至少让人知道这是什么东西
+    if dot:
+        suffix = "." + ext
+        if suffix in EXT_GLOSSARY:
+            return EXT_GLOSSARY[suffix]
+    return ""
+
+
 USER_MIN = 256 * 1024 ** 2
 FOLDER_MIN = 200 * 1024 ** 2
+# 生成"待你决定"建议的最小体积：深度下钻能看到所有 ≥200MB 的目录，
+# 但小于 1GB 的零碎项不值得单独搬迁，只在"全部发现"展示，避免决策页被几百条小项淹没。
+PROPOSAL_MIN = 1024 ** 3
 # 应用识别表：键为路径中出现的目录名片段（小写），值为展示名。
 # 命中后该类目录判定为 migrate-app，提示搬迁后需在应用内改存储位置。
 APP_TABLE = {
@@ -452,6 +735,167 @@ USER_APP_DIRS = ("wechat files", "xwechat_files", "tencent files", "downloads",
                  "documents", "desktop", "pictures", "videos", "music", "onedrive",
                  ".workbuddy", ".vscode", ".gradle", ".m2", ".npm", ".cache")
 MIGRATION_ROOT = "磁盘清理迁移"
+
+# ── 目录用途识别：靠子目录特征标记与目录自身命名，判断一个大目录"大概是做啥的" ──
+# 每项：(标记名, 展示用途)。命中任一即认定用途；可多重命中。
+PURPOSE_MARKERS = {
+    ".git": "Git 代码仓库", ".obsidian": "Obsidian 笔记库", ".workbuddy": "WorkBuddy 工作区",
+    ".vscode": "VS Code 工作区", ".idea": "JetBrains 项目",
+    "package.json": "Node 项目", "node_modules": "Node 依赖",
+    "venv": "Python 虚拟环境", ".venv": "Python 虚拟环境",
+    "pyproject.toml": "Python 项目", "requirements.txt": "Python 项目",
+    "Cargo.toml": "Rust 项目", "go.mod": "Go 项目",
+    "dist": "构建产物", "build": "构建产物", "target": "编译产物",
+    "backup": "备份数据", "backup-040-data": "备份数据",
+}
+
+# 目录名本身能透露的用途（子串匹配，小写）。
+PURPOSE_NAME_HINTS = (
+    ("下载", "下载/暂存"), ("download", "下载/暂存"), ("卡拉米", "下载/暂存"),
+    ("备份", "备份数据"), ("backup", "备份数据"), ("history", "历史归档"),
+    ("视频", "视频工程"), ("video", "视频工程"), ("vedio", "视频工程"),
+    ("wiki", "知识库"), ("知识", "知识库"), ("obsidian", "笔记库"),
+    ("workspace", "开发工作区"), ("lab", "实验项目"), ("test", "测试项目"),
+    ("candidate", "测试项目"), ("总库", "资料总库"),
+)
+
+
+def _dir_mtime(path):
+    """目录最后修改时间（YYYY-MM-DD），读取失败返回空串。"""
+    try:
+        import datetime as _dt
+        return _dt.datetime.fromtimestamp(Path(path).stat().st_mtime).strftime("%Y-%m-%d")
+    except OSError:
+        return ""
+
+
+def purpose_of(path, *, deep=True):
+    """识别一个目录的用途。返回 (用途标签, 依据)。只读顶层与少量子层，不递归全树。"""
+    p = Path(path)
+    tags, evidence = [], []
+    name = p.name.casefold()
+    for hint, label in PURPOSE_NAME_HINTS:
+        if hint in name and label not in tags:
+            tags.append(label)
+    # 时间戳命名的目录（如 2026-08-20-23-12-04）视为会话/历史产物
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}[-_]\d{2}-\d{2}-\d{2}", p.name):
+        if "会话工作区" not in tags:
+            tags.append("会话工作区")
+    # 系统级容器（Users/ProgramData/Program Files/Windows）本身不是"某个项目"，
+    # 其内部碰巧有 .workbuddy / package.json 也不代表整个目录是该用途，必须跳过标记识别，
+    # 否则会把整个用户目录误判成可搬迁的应用工作区。
+    container = p.name.casefold() in {"users", "programdata", "program files",
+                                      "program files (x86)", "windows"}
+    if deep and p.is_dir() and not container:
+        try:
+            direct = {e.name for e in p.iterdir()}
+        except OSError:
+            direct = set()
+        for marker, label in PURPOSE_MARKERS.items():
+            if marker in direct and label not in tags:
+                tags.append(label)
+                evidence.append(marker)
+        # 再下钻一层非隐藏子目录，捕捉"项目容器"里某个子项目的技术栈。
+        if not tags:
+            try:
+                subs = [e for e in p.iterdir() if e.is_dir() and not e.name.startswith(".")]
+            except OSError:
+                subs = []
+            for sub in subs[:10]:
+                try:
+                    subnames = {e.name for e in sub.iterdir()}
+                except OSError:
+                    continue
+                for marker, label in PURPOSE_MARKERS.items():
+                    if marker in subnames and label not in tags:
+                        tags.append(label)
+                        evidence.append(marker)
+    if not tags:
+        return "一般数据目录", "未发现明确特征"
+    return " + ".join(tags[:3]), ("特征：" + ", ".join(evidence[:4])) if evidence else "目录名"
+
+
+def deep_inspect_topdirs(state, seconds):
+    """对所有目标盘的顶层大目录做用途识别，生成可搬迁/需确认的候选项。
+
+    注意：inspect_volume 已递归算出每个顶层目录的合计大小，但只输出顶层；
+    这里对每个顶层目录补充用途识别与建议，不重复做全树遍历。
+    """
+    notes = []
+    disks = {r["disk"]: r for r in disk_rows() if "free" in r}
+    known = {r["path"].casefold(): r for r in state["found"]}
+    for disk in state["targets"]:
+        if disk not in disks:
+            continue
+        for row in list(state["found"]):
+            if row["disk"] != disk or not row.get("directory"):
+                continue
+            size = row.get("bytes") or 0
+            if size < PROPOSAL_MIN:
+                continue
+            top = Path(row["path"]).name.casefold()
+            # 系统保留目录、标准用户目录、回收站等交给原有逻辑，不重复处理
+            # "users"/"programdata" 等系统容器也不应作为可搬迁/可清理项
+            skip_tops = SYSTEM_TOP | USER_DIRS | {"$recycle.bin", "users", "programdata"}
+            if top in skip_tops:
+                continue
+            # 已经被识别为应用/用户/缓存并生成建议的，不重复
+            if any(p["id"] == row["id"] for p in state["proposals"]):
+                continue
+            label, basis = purpose_of(row["path"])
+            mtime = _dir_mtime(row["path"])
+            row["kind"] = "migrate-user"
+            row["kindName"] = label
+            row["purpose"] = label
+            row["purposeBasis"] = basis
+            row["modified"] = mtime
+            rid = row["id"]
+            # 是否包含当前工作区/脚本自身：不禁止搬迁（用户可决定），但必须在提示里讲清
+            # "需先在应用内切换工作区再搬"，否则搬走正在运行的目录会破坏会话。
+            try:
+                import os as _os
+                src = Path(row["path"]).resolve()
+                bases = [Path.cwd().resolve(), Path(__file__).resolve()]
+                ws = _os.environ.get("DISK_CLEANUP_WORKSPACE", "")
+                if ws:
+                    bases.append(Path(ws).resolve())
+                in_use = any(src == base or src in base.parents for base in bases)
+            except OSError:
+                in_use = False
+            row["inUse"] = in_use
+            # 目标盘：排除源盘，优先非系统盘，再按可用空间（统一 pick_target_disk）
+            target = pick_target_disk(list(disks.values()), disk)
+            if target and target["free"] >= size:
+                dst = make_target_path(disk, target["disk"], row["path"])
+                rec = (f"[{label}] {row['name']}（{size/1024**3:.1f} GiB，{basis}）"
+                       f"从 {disk} 盘迁到 {target['disk']} 盘；最后修改 {mtime or '未知'}。")
+                impact = ("这是" + label + "。搬迁保留完整目录结构与路径名。"
+                          + ("注意：该目录包含当前正在使用的工作区或工具自身，搬迁前必须先在应用内把工作区/存储位置切走，"
+                             "否则会搬走正在运行的会话导致工具异常。" if in_use else "")
+                          + "搬迁后须到该应用的设置里改存储位置或重新指定目录，否则应用可能找不到数据。")
+                state["proposals"].append({
+                    "id": rid, "action": "migrate", "estimate": size, "auto": True,
+                    "recommendation": rec, "impact": impact,
+                    "target": f"目标位置：{dst}（{target['disk']} 盘当前可用 {target['free']/1024**3:.1f} GiB）",
+                    "targetPath": dst, "sourceDisk": disk, "targetDisk": target["disk"],
+                    "needAppReset": True,
+                })
+            else:
+                # 目标盘装不下或没有空盘：只给"需确认"的提示，纳入决策页但不提供搬迁路径
+                state["proposals"].append({
+                    "id": rid, "action": "app-clean", "estimate": size, "auto": True,
+                    "recommendation": (f"[{label}] {row['name']}（{size/1024**3:.1f} GiB，{basis}）"
+                                       f"最后修改 {mtime or '未知'}。没有足够空盘可承接整体搬迁，"
+                                       "请在应用内清理或在盘内整理。"),
+                    "impact": ("这是" + label + "，本工具不会自动删除。请确认内容可重建或可删除后再处理；"
+                               "若含工作区/项目源码，建议改用应用内清理或先备份。"
+                               + ("注意：该目录包含当前正在使用的工作区或工具自身，请先确认不会影响当前会话。"
+                                  if in_use else "")),
+                    "target": "在对应应用设置里清理缓存/数据，或手动整理该目录；也可先删除可重建的子目录（如 node_modules、dist）。",
+                    "needAppReset": False,
+                })
+        notes.append(f"{disk} 盘：已对顶层大目录做用途识别。")
+    return notes
 
 
 def match_app(text):
@@ -513,16 +957,89 @@ def make_target_path(source, target_disk, path):
     return str(dst)
 
 
-def _migration_target(state, source, path):
-    """在可用空间最大的空白盘上生成唯一目标路径。"""
-    rows = [r for r in disk_rows() if "free" in r and r["disk"] != source]
+def is_system_disk(disk):
+    """该盘是否系统盘（存在 Windows 目录或为启动卷）。"""
+    try:
+        if (Path(disk + ":\\Windows")).is_dir():
+            return True
+        # 备用：系统目录所在盘符
+        system_root = os.environ.get("SystemRoot", "")
+        if system_root[:2].upper() == disk.upper() + ":":
+            return True
+    except OSError:
+        pass
+    return False
+
+
+def pick_target_disk(candidates, source):
+    """从候选盘里挑搬迁目标：排除源盘，优先非系统盘，再按可用空间降序。
+
+    系统盘（通常是 C）即便可用空间很大也不作为默认目标——它承载系统与临时文件，
+    搬入大目录会挤压系统余量。若除系统盘外别无选择，才退回系统盘。
+    """
+    rows = [r for r in candidates if "free" in r and r.get("disk") and r["disk"] != source]
     if not rows:
+        return None
+    non_system = [r for r in rows if not is_system_disk(r["disk"])]
+    pool = non_system or rows
+    return max(pool, key=lambda r: r["free"])
+
+
+def _migration_target(state, source, path):
+    """在合适目标盘上生成唯一目标路径（优先非系统盘）。"""
+    target = pick_target_disk(disk_rows(), source)
+    if not target:
         return None, None
-    target = max(rows, key=lambda r: r["free"])
     try:
         return make_target_path(source, target["disk"], path), target
     except ValueError:
         return None, None
+
+
+def _can_delete(row):
+    """该条目是否允许"直接清理（永久删除）"。
+
+    严格限制：只对 migrate 类用户/应用数据目录开放；系统目录、软件安装目录、
+    盘根、用户主目录容器、回收站等一律不允许。宁可少开，不可误删。
+    """
+    if not row or not row.get("directory"):
+        return False
+    if row.get("kind") not in ("migrate-app", "migrate-user"):
+        return False
+    path = str(row.get("path") or "").rstrip("\\")
+    if not path:
+        return False
+    # 不允许删盘根本身；盘根下的目录（含 D:\某目录 这种 2 段）是合法对象，
+    # 但盘根下的系统级容器会在下面按名字再排除。
+    parts = [p for p in path.replace("/", "\\").split("\\") if p]
+    if len(parts) < 2:
+        return False
+    leaf = parts[-1].casefold()
+    if leaf in SYSTEM_TOP or leaf in {"users", "programdata"} or leaf in USER_DIRS:
+        return False
+    if leaf.startswith("$"):
+        return False
+    # 路径中只要出现系统/软件安装目录，就整条链拒绝（例如 E:\Program Files (x86)\某游戏）——
+    # 这类目录属于"已安装软件"，正确做法是卸载或搬迁，而不是直接删。
+    chain = [seg.casefold() for seg in parts]
+    if any(seg in {"windows", "program files", "program files (x86)", "programdata",
+                   "system volume information", "recovery"} for seg in chain[:-1]):
+        return False
+    # 盘符必须有效
+    if not re.match(r"^[A-Za-z]:", path):
+        return False
+    # 当前工作区/脚本自身所在目录绝不允许删除
+    try:
+        src = Path(path).resolve()
+        bases = [Path.cwd().resolve(), Path(__file__).resolve().parent]
+        ws = os.environ.get("DISK_CLEANUP_WORKSPACE", "")
+        if ws:
+            bases.append(Path(ws).resolve())
+        if any(src == base or src in base.parents or base in src.parents for base in bases):
+            return False
+    except OSError:
+        return False
+    return True
 
 
 def finalize_proposals(state):
@@ -540,6 +1057,11 @@ def finalize_proposals(state):
             # 应用数据可选用应用内存储管理（不自动删除）作为替代方案
             if row.get("kind") == "migrate-app":
                 allowed.append("app-clean")
+            # 用户明确要求：可搬迁项也允许用户主动选择"直接清理"（永久删除）。
+            # 仅对 migrate 类（用户数据/应用数据）且不在系统保护名单内的目录开放；
+            # 默认动作仍是搬迁，必须用户主动切换——绝不默认选中删除。
+            if _can_delete(row):
+                allowed.append("delete")
         elif action in ("app-clean", "uninstall", "system", "read-space", "recycle", "recycle-review"):
             allowed = [action]
         else:
@@ -548,8 +1070,22 @@ def finalize_proposals(state):
             allowed.append("skip")
         p["allowedActions"] = allowed
         p["recommendedAction"] = action
-        p["recommendedTargetDisk"] = p.get("targetDisk") or (
+        # 推荐目标盘优先非系统盘（下拉仍列出全部盘，用户可自行决定）
+        pref = next((d for d in (p.get("targetDisks") or []) if not is_system_disk(d)), None)
+        p["recommendedTargetDisk"] = p.get("targetDisk") or pref or (
             p["targetDisks"][0] if p.get("targetDisks") else None)
+
+    # 可删项只保留"最外层"：若某可删目录的祖先目录也可删，则收回子项的删除权限，
+    # 避免父目录与子目录同时出现在可删列表里造成误删与重复计算。
+    deletable = [(p["id"], str(rows.get(p["id"], {}).get("path") or "").rstrip("\\").casefold())
+                 for p in state.get("proposals", []) if "delete" in (p.get("allowedActions") or [])]
+    delete_paths = [path for _, path in deletable if path]
+    for pid, path in deletable:
+        if not path:
+            continue
+        if any(path != other and path.startswith(other + "\\") for other in delete_paths):
+            prop = next(p for p in state["proposals"] if p["id"] == pid)
+            prop["allowedActions"] = [a for a in prop["allowedActions"] if a != "delete"]
 
 
 def decisions_digest(decisions):
@@ -580,6 +1116,12 @@ def validate_decisions(state, decisions):
         if action == "skip":
             continue
         normalized = {"id": pid, "action": action}
+        if action == "delete":
+            # 永久删除必须由用户二次确认（页面弹窗确认后回传 confirmDelete）。
+            if not item.get("confirmDelete"):
+                raise ValueError(f"{row.get('name')} 的删除未确认，已拒绝。")
+            if not _can_delete(row):
+                raise ValueError(f"{row.get('name')} 不允许直接删除。")
         if action == "migrate":
             src = (row.get("disk") or "").upper()
             target = str(item.get("targetDisk") or "").upper()
@@ -613,14 +1155,20 @@ def build_composition(state, src_disk, units):
     labels = {"system": "系统与保留", "app": "应用与游戏", "user": "用户文档",
               "cache": "应用缓存与临时", "other": "其他未分类"}
     buckets = {k: {"bytes": 0, "items": 0, "samples": []} for k in labels}
+    # 顶层大目录的用途标签（由 deep_inspect_topdirs 补写），给未分类项一个合理归属，
+    # 避免 D/E 盘整盘落到"其他未分类"造成误解。
+    purpose_by_path = {r["path"].casefold(): (r.get("purpose") or "") for r in state.get("found", [])}
     for path, size, kind, name in units:
+        purpose = purpose_by_path.get(str(path).casefold(), "")
         if kind in ("system",):
             key = "system"
-        elif kind in ("migrate-app",):
-            key = "app"
-        elif kind == "cache":
+        elif kind == "cache" or "缓存" in purpose:
             key = "cache"
-        elif kind in ("migrate-user",):
+        elif kind in ("migrate-app",) or any(t in purpose for t in
+                ("Git", "Node", "Python", "项目", "工作区", "笔记", "编译", "构建")):
+            key = "app"
+        elif kind in ("migrate-user",) or any(t in purpose for t in
+                ("下载", "备份", "资料", "文档", "视频", "归档", "知识")):
             key = "user"
         else:
             key = "other"
@@ -659,19 +1207,53 @@ def auto_plan(state, seconds):
         elif key in candidates:
             return
         else:
-            row = {"id": uuid.uuid4().hex, "disk": src_disk, "path": str(path),
+            # 盘符从实际路径推导（取首字母，不带冒号），不能写死 src_disk——
+            # 否则 C 盘下钻出的应用被记成 "C:" 或错记到 D 盘。
+            m = re.match(r"^([A-Za-z]):", str(path))
+            disk = m.group(1).upper() if m else src_disk
+            row = {"id": uuid.uuid4().hex, "disk": disk, "path": str(path),
                    "name": Path(path).name, "bytes": size, "coverage": "自动识别",
-                   "directory": Path(path).is_dir(), "links": 0, "errors": 0, "pending": False}
+                   "directory": Path(path).is_dir(), "links": 0, "errors": 0, "pending": False,
+                   "discovered": True}
+            # 登记到"全部发现"，让下钻结果在页面可见；同一路径只登记一次。
+            if not any(r.get("path", "").casefold() == key for r in state["found"]):
+                state["found"].append(row)
         row["kind"] = kind
         row["kindName"] = name
         candidates[key] = (row, size, kind, name)
+
+    def register_discovered(path, size, kind, name):
+        """登记一个够大但不可自动处理的子目录到"全部发现"，附用途说明，供用户查看。"""
+        key = str(path).casefold().rstrip("\\")
+        if key in known or any(r.get("path", "").casefold().rstrip("\\") == key
+                               for r in state["found"]):
+            return
+        m = re.match(r"^([A-Za-z]):", str(path))
+        disk = m.group(1).upper() if m else src_disk
+        label, basis = purpose_of(path, deep=False)
+        # 列出直接子目录名（最多5个），让"里面是什么"一眼可见
+        children_hint = []
+        try:
+            if Path(path).is_dir():
+                children_hint = [e.name for e in Path(path).iterdir()
+                                 if e.is_dir() and not e.name.startswith(".")][:5]
+        except OSError:
+            pass
+        state["found"].append({"id": uuid.uuid4().hex, "disk": disk, "path": str(path),
+                               "name": Path(path).name, "bytes": size,
+                               "coverage": "深度下钻", "directory": Path(path).is_dir(),
+                               "links": 0, "errors": 0, "pending": False,
+                               "discovered": True, "kind": kind, "kindName": name,
+                               "purpose": label, "purposeBasis": basis,
+                               "childrenHint": children_hint})
 
     def scan_folder(folder):
         """下钻一个目录，把直接子项作为归类单元；返回子项 (path, size, kind, name)。"""
         try:
             if not folder.is_dir() or is_link(folder.lstat()):
                 return []
-            children, _ = inspect_volume(src_disk, seconds, folder)
+            disk = str(folder)[:2].upper() if re.match(r"^[A-Za-z]:", str(folder)) else src_disk
+            children, _ = inspect_volume(disk, seconds, folder)
         except OSError:
             return []
         refined_done.add(str(folder).casefold().rstrip("\\") + "\\")
@@ -682,8 +1264,14 @@ def auto_plan(state, seconds):
                 continue
             kind, name = classify_path(child["path"])
             out.append((child["path"], size, kind, name))
-            if size >= FOLDER_MIN and kind in ("migrate-app", "migrate-user", "cache"):
+            if size < FOLDER_MIN:
+                continue
+            # 大项（≥1GB）且可处理的才生成建议；其余（含小项、系统/软件目录）
+            # 都登记到"全部发现"并附用途说明——看得见，但不塞进决策页。
+            if size >= PROPOSAL_MIN and kind in ("migrate-app", "migrate-user", "cache"):
                 put(Path(child["path"]), size, kind, name)
+            else:
+                register_discovered(child["path"], size, kind, name)
         return out
 
     # 1) 顶层构成：卷根直接子项已含递归合计，先整体归类。
@@ -699,9 +1287,12 @@ def auto_plan(state, seconds):
             continue
         units.append((row["path"], row["bytes"], kind, name))
 
-    # 2) 用户目录：每个用户的 AppData 三处 + 常用主目录，深度下钻。
-    users_root = Path(src_disk + ":\\Users")
-    if users_root.is_dir():
+    # 2) 用户目录：对每个目标盘的每个用户账户下钻 AppData 三处 + 常用主目录。
+    #    不能只扫最紧张盘——否则最紧张盘是 D 时，C 盘的微信/Docker/豆包等应用数据会全部漏掉。
+    for drill_disk in state["targets"]:
+        users_root = Path(drill_disk + ":\\Users")
+        if not users_root.is_dir():
+            continue
         try:
             for user in users_root.iterdir():
                 if user.name.casefold() in ("public", "default", "default user", "all users"):
@@ -713,28 +1304,35 @@ def auto_plan(state, seconds):
                     if folder.is_dir():
                         units.extend(scan_folder(folder))
         except OSError as exc:
-            notes.append(f"{src_disk} 盘用户目录枚举受限：{exc}")
+            notes.append(f"{drill_disk} 盘用户目录枚举受限：{exc}")
 
     # 3) Program Files / ProgramData：逐应用下钻，识别安装目录与缓存。
+    #    同样对所有目标盘下钻，避免非最紧张盘上的应用数据被漏掉。
     #    scan_folder 会把达到阈值的 migrate-app/cache 子目录登记为候选。
-    for top in ("Program Files", "Program Files (x86)", "ProgramData"):
-        root = Path(src_disk + ":\\") / top
-        if root.is_dir():
-            scan_folder(root)
+    for drill_disk in state["targets"]:
+        for top in ("Program Files", "Program Files (x86)", "ProgramData"):
+            root = Path(drill_disk + ":\\") / top
+            if root.is_dir():
+                scan_folder(root)
 
-    # 4) 顶层的应用/用户/缓存目录也下钻细分（避免把整个 Program Files 当一项）。
+    # 4) 所有目标盘的所有顶层大目录都下钻细分——深度清理不是只针对某一盘。
+    #    用户选了哪些盘，就对哪些盘逐一深入，避免 D/E 盘只剩顶层容器、看不到里面是什么。
     for row in list(state["found"]):
-        if row["disk"] != src_disk or not row.get("directory"):
+        if row["disk"] not in state["targets"] or not row.get("directory"):
+            continue
+        size = row.get("bytes") or 0
+        if size < FOLDER_MIN:
             continue
         kind, name = classify_path(row["path"])
-        if kind in ("migrate-app", "migrate-user", "cache"):
-            got = scan_folder(Path(row["path"]))
-            if not got:
-                # 下钻失败：以整体兜底计入，避免这部分空间消失
-                prefix = str(row["path"]).casefold().rstrip("\\") + "\\"
-                if prefix not in refined_done:
-                    units.append((row["path"], row["bytes"], kind, name))
-                    refined_done.add(prefix)
+        prefix = str(row["path"]).casefold().rstrip("\\") + "\\"
+        if prefix in refined_done:
+            continue
+        got = scan_folder(Path(row["path"]))
+        if not got:
+            # 下钻失败：以整体兜底计入，避免这部分空间消失
+            if prefix not in refined_done:
+                units.append((row["path"], row["bytes"], kind, name))
+                refined_done.add(prefix)
 
     # 对第 1 步跳过的顶层目录，若其前缀从未成功细分，同样兜底。
     for prefix in refined_prefixes:
@@ -746,6 +1344,9 @@ def auto_plan(state, seconds):
                 units.append((row["path"], row["bytes"], kind, name))
                 break
 
+    # 4.5) 先给顶层大目录打用途标签，再生成占用构成——否则用途标签晚于构成写入，
+    #      会导致 D/E 盘整盘落进"其他未分类"。此步必须在 build_composition 之前。
+    notes.extend(deep_inspect_topdirs(state, seconds))
     build_composition(state, src_disk, units)
 
     # 5) 缓存：只提示用应用内清理，绝不自动删除。
@@ -827,9 +1428,36 @@ def auto_plan(state, seconds):
         "target": "管理员命令行执行：Dism /Online /Cleanup-Image /StartComponentCleanup",
         "auto": True,
     })
+    # 全局去重：下钻与路径识别可能把同一路径登记多次（大小写/来源不同），
+    # 保留 bytes 最大的一条，并同步删掉指向被合并行的建议。
+    dedup_found(state)
     state["proposals"].sort(key=lambda p: -(p.get("estimate") or 0))
-    notes.append(f"已自动生成 {len(state['proposals'])} 条建议（含迁移、系统项与回收站）。")
+    notes.append(f"已自动生成 {len(state['proposals'])} 条建议（含迁移、系统项、回收站与大目录用途识别）。")
     return notes
+
+
+def dedup_found(state):
+    """按规范化路径去重 state['found']，并清理指向被删行的建议。"""
+    keep = {}
+    for row in state.get("found", []):
+        key = str(row.get("path", "")).casefold().rstrip("\\")
+        cur = keep.get(key)
+        # 保留信息更全的一条：优先字节数大的，其次字段多的
+        if cur is None or (row.get("bytes") or 0) > (cur.get("bytes") or 0):
+            keep[key] = row
+    state["found"] = list(keep.values())
+    valid = {r["id"] for r in state["found"]}
+    # 同一 id 只保留一条建议：优先带 sourceDisk/targetDisk（新版用途识别）或 estimate 更大的
+    by_id = {}
+    for p in state.get("proposals", []):
+        if p.get("id") not in valid:
+            continue
+        cur = by_id.get(p["id"])
+        score = (1 if p.get("targetDisk") else 0, p.get("estimate") or 0)
+        cur_score = (1 if cur.get("targetDisk") else 0, cur.get("estimate") or 0) if cur else (-1, -1)
+        if cur is None or score > cur_score:
+            by_id[p["id"]] = p
+    state["proposals"] = list(by_id.values())
 
 
 def write_page(path, template, state, history_link):
@@ -846,6 +1474,10 @@ def emit(run_dir, state, *, publish=False):
     state["archived"] = (BASE / "disk_cleanup_decision.legacy.html").is_file()
     if state.get("mode") == "deep" and "deep" not in state:
         finalize_proposals(state)
+    # 给所有英文目录/文件名补中文解释，页面直接展示，避免满屏英文看不懂。
+    for row in state.get("found", []):
+        if not row.get("nameZh"):
+            row["nameZh"] = zh_name(row.get("name"))
     dump(run_dir / "run.json", state)
     template = (BASE / "disk_cleanup_template.html").read_text(encoding="utf-8-sig")
     write_page(run_dir / "disk_cleanup_decision.html", template, state,
@@ -1020,6 +1652,24 @@ def apply_selection(directory, state, source):
                 moved = migrate_target(state, row, effective)
                 entry.update(status="完成", note=f"已迁移到 {moved}。" + proposal.get("impact", ""))
             except (OSError, ValueError, subprocess.SubprocessError) as exc:
+                entry.update(status="未确认完成", note=str(exc))
+        elif action == "delete":
+            # 用户主动选择的永久删除：再次确认路径安全后执行，失败不强行继续。
+            try:
+                target = Path(row["path"])
+                if not _can_delete(row):
+                    raise ValueError("该目录不在允许直接清理的范围内。")
+                if not target.exists():
+                    raise ValueError("目录已不存在，可能已被移动或删除。")
+                if is_link(target.lstat()):
+                    raise ValueError("目标是链接，已拒绝删除。")
+                freed = row.get("bytes") or 0
+                shutil.rmtree(target)
+                if target.exists():
+                    raise OSError("删除后目录仍然存在，未确认完成。")
+                entry.update(status="完成",
+                             note=f"已永久删除该目录（原占用 {freed/1024**3:.2f} GiB），不可恢复。")
+            except (OSError, ValueError) as exc:
                 entry.update(status="未确认完成", note=str(exc))
         else:
             entry.update(status="待 WorkBuddy 打开指定入口", note=proposal["target"])
