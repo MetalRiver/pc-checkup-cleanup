@@ -1,6 +1,6 @@
 ---
 name: disk-cleanup
-version: 1.4.3
+version: 1.4.4
 display_name: 全自动化系统电脑体检与清理
 author: 途有引力
 license: MIT

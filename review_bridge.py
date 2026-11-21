@@ -15,10 +15,84 @@ import cleanup
 
 BASE = Path(__file__).resolve().parent
 TTL = 7200  # 2 小时；用户需逐条核对几十项，15 分钟太短
+# 端口固定：原来用 0 让系统随机分配，WorkBuddy/MCP 一重启端口就变，
+# 用户手里已打开的页面立刻失效（Failed to fetch）。改为固定起点 + 有限递增。
+PORT_BASE = 8791
+PORT_TRIES = 20
 sessions = {}
 guard = threading.RLock()
 server = None
 stdout_lock = threading.Lock()
+
+
+def session_file(run_id):
+    return BASE / "runs" / run_id / "bridge_session.json"
+
+
+def save_session(s):
+    """把会话关键信息落盘，供进程重启后恢复（页面不至于彻底失效）。"""
+    if s.get("test") or not s.get("plan"):
+        return
+    run_id = s["plan"].get("runId")
+    if not run_id or str(run_id).startswith("test-"):
+        return
+    try:
+        cleanup.dump(session_file(run_id), {
+            "view": s["view"], "handle": s["handle"], "runId": run_id,
+            "expiresAt": s.get("expires_at") or 0,
+        })
+    except OSError:
+        pass
+
+
+def restore_sessions():
+    """启动时把未过期的会话从磁盘恢复，让旧页面仍能提交。"""
+    runs = BASE / "runs"
+    if not runs.is_dir():
+        return
+    now = time.time()
+    for path in sorted(runs.glob("*/bridge_session.json")):
+        try:
+            meta = cleanup.load(path)
+        except (OSError, ValueError):
+            continue
+        if not isinstance(meta, dict) or meta.get("expiresAt", 0) <= now:
+            continue
+        run_id = meta.get("runId")
+        if not run_id or run_id in {s["plan"].get("runId") for s in sessions.values()}:
+            continue
+        try:
+            plan = read_run(run_id)
+        except ValueError:
+            continue
+        handle = meta.get("handle") or secrets.token_hex(16)
+        sessions[handle] = {"view": meta.get("view") or secrets.token_hex(16), "handle": handle,
+                            "plan": plan, "digest": digest(plan), "test": False,
+                            "event": threading.Event(), "ids": None, "decisions": None,
+                            "received": False, "finish": threading.Event(), "finished": False,
+                            "expires": time.monotonic() + TTL,
+                            "expires_at": meta.get("expiresAt") or (now + TTL)}
+
+
+def start_server():
+    """固定端口优先；被占用时有限递增，避免随机端口导致旧页面失效。"""
+    global server
+    if server is not None:
+        return server
+    last = None
+    for offset in range(PORT_TRIES):
+        port = PORT_BASE + offset
+        try:
+            server = ThreadingHTTPServer(("127.0.0.1", port), Page)
+            break
+        except OSError as exc:
+            last = exc
+            server = None
+    if server is None:
+        raise ValueError(f"无法占用 {PORT_BASE}-{PORT_BASE + PORT_TRIES - 1} 任一端口：{last}")
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    restore_sessions()
+    return server
 
 
 def digest(plan):
@@ -108,14 +182,15 @@ def open_review(run_id=None, test=False, recover=False):
                 item["expires"] = time.monotonic() - 1
                 item["superseded"] = True
         if server is None:
-            server = ThreadingHTTPServer(("127.0.0.1", 0), Page)
-            threading.Thread(target=server.serve_forever, daemon=True).start()
+            start_server()
         sessions[handle] = {"view": view, "handle": handle, "plan": state,
                             "digest": digest(state), "test": test,
                             "event": threading.Event(), "ids": None, "decisions": None,
                             "received": False, "finish": threading.Event(), "finished": False,
-                            "expires": time.monotonic() + TTL}
+                            "expires": time.monotonic() + TTL,
+                            "expires_at": time.time() + TTL}
         url = f"http://127.0.0.1:{server.server_port}/{view}/"
+        save_session(sessions[handle])
         if not test:
             template = (BASE / "disk_cleanup_template.html").read_text(encoding="utf-8-sig")
             bound = {**state, "reviewUrl": url}
@@ -300,16 +375,41 @@ class Page(BaseHTTPRequestHandler):
     def respond(self, code, data, kind="application/json"):
         raw = (data if kind.startswith("text/html") else json.dumps(data, ensure_ascii=False)).encode()
         self.send_response(code)
-        for key, val in {"Cache-Control":"no-store", "Referrer-Policy":"no-referrer",
-                         "X-Content-Type-Options":"nosniff", "Content-Type":kind + "; charset=utf-8",
-                         "Content-Length":str(len(raw))}.items():
+        headers = {"Cache-Control":"no-store", "Referrer-Policy":"no-referrer",
+                   "X-Content-Type-Options":"nosniff", "Content-Type":kind + "; charset=utf-8",
+                   "Content-Length":str(len(raw))}
+        # 允许本机回环的任意端口跨源：bridge 端口递增后，旧页面仍可自动找回并提交。
+        origin = self.headers.get("Origin") or ""
+        if re.fullmatch(r"http://127\.0\.0\.1:\d{2,5}", origin):
+            headers["Access-Control-Allow-Origin"] = origin
+            headers["Vary"] = "Origin"
+            headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+            headers["Access-Control-Allow-Headers"] = "Content-Type"
+        for key, val in headers.items():
             self.send_header(key, val)
         self.end_headers()
         self.wfile.write(raw)
 
+    def do_OPTIONS(self):
+        # CORS 预检：仅在来源是本机回环时放行。
+        origin = self.headers.get("Origin") or ""
+        if re.fullmatch(r"http://127\.0\.0\.1:\d{2,5}", origin):
+            self.send_response(204)
+            self.send_header("Access-Control-Allow-Origin", origin)
+            self.send_header("Vary", "Origin")
+            self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+            self.send_header("Access-Control-Allow-Headers", "Content-Type")
+            self.send_header("Access-Control-Max-Age", "600")
+            self.end_headers()
+            return
+        self.send_response(204)
+        self.end_headers()
+
     def target(self):
-        host = f"127.0.0.1:{self.server.server_port}"
-        if self.headers.get("Host") != host:
+        # 只接受本机回环来源（防 DNS rebinding）；端口不再写死，
+        # 这样 bridge 因端口递增重启后，用户手里已打开的页面仍能提交。
+        host = self.headers.get("Host") or ""
+        if not re.fullmatch(r"127\.0\.0\.1:\d{2,5}", host):
             raise ValueError("连接目标不匹配。")
         match = re.fullmatch(r"/([A-Za-z0-9_-]{32})/(status|submit|finish)?", self.path)
         if not match:
@@ -342,9 +442,10 @@ class Page(BaseHTTPRequestHandler):
     def do_POST(self):
         try:
             s, route = self.target()
-            origin = f"http://127.0.0.1:{self.server.server_port}"
+            origin = self.headers.get("Origin") or ""
             kind = self.headers.get_content_type()
-            if not (self.headers.get("Origin") == origin and kind == "application/json"):
+            # 同样只校验"来自本机某个端口"，不绑定具体端口号
+            if not (re.fullmatch(r"http://127\.0\.0\.1:\d{2,5}", origin) and kind == "application/json"):
                 raise ValueError("请在本轮工作台提交。")
             if route == "finish":
                 with guard:
@@ -408,7 +509,7 @@ def dispatch(request):
     if method == "initialize":
         supported = ("2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05")
         return {"protocolVersion": params.get("protocolVersion") if params.get("protocolVersion") in supported else supported[0],
-                "capabilities":{"tools":{}}, "serverInfo":{"name":"disk-cleanup-review", "version":"1.4.1"}}
+                "capabilities":{"tools":{}}, "serverInfo":{"name":"disk-cleanup-review", "version":"1.4.4"}}
     if method == "ping":
         return {}
     if method == "tools/list":

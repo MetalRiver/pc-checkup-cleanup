@@ -150,6 +150,12 @@ summary{width:fit-content;color:var(--blue);cursor:pointer;font-size:13px}
 .kids-hint{color:#8892a6;font-size:11.5px;margin-top:2px}
 .name-zh{display:block;font-size:12px;color:#5b6b82;margin-top:2px}
 .danger-tag{display:inline-block;font-size:11.5px;color:#a32d2d;background:#fcebeb;border:1px solid #f7c1c1;padding:2px 8px;border-radius:6px;margin-top:4px}
+.ai-line{display:flex;align-items:center;gap:7px;flex-wrap:wrap;margin-bottom:3px}
+.ai-badge{font-size:11px;color:#185fa5;background:#e6f1fb;border:1px solid #b5d4f4;padding:1px 7px;border-radius:6px;font-weight:500}
+.ai-act{font-size:13px;color:var(--ink)}
+.changed-tag{font-size:11px;color:#534ab7;background:#eeedfe;border:1px solid #cecbf6;padding:1px 7px;border-radius:6px}
+.ai-why{margin:6px 0 3px;padding:7px 10px;background:#fdf7e6;border-left:2px solid #ef9f27;border-radius:0 6px 6px 0;font-size:12px;color:#633806;line-height:1.65}
+.ai-why span{font-weight:500;margin-right:6px}
 /* 占用构成：空间去哪了 */
 .composition{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:16px 18px;margin:0 0 16px}
 .composition h2{font-size:16px;display:flex;align-items:center;gap:8px}
@@ -410,11 +416,7 @@ function measurement(name, stage) {
   + escape(localTime(stage.after?.time)) + '</small></div>';
 }
 
-function renderComposition() {
-  const slot = get('composition-slot');
-  if (!slot) return;
-  const comp = run.composition;
-  if (!comp || !Array.isArray(comp.categories) || !comp.categories.length) { slot.innerHTML = ''; return; }
+function compositionCard(comp) {
   const palette = {system:'#7a8ba3', app:'#2054be', user:'#7a52c7', cache:'#d98a12', other:'#aab6c6'};
   const cats = comp.categories.filter(c => c.bytes > 0);
   const total = cats.reduce((s, c) => s + c.bytes, 0) || 1;
@@ -433,10 +435,20 @@ function renderComposition() {
   }).join('');
   const note = comp.note ? '<small style="color:var(--muted);display:block;margin-top:10px">'
     + escape(comp.note) + '</small>' : '';
-  slot.innerHTML = '<section class="composition" aria-label="占用构成"><h2>'
+  return '<section class="composition" aria-label="占用构成"><h2>'
     + ICON.scan + '空间去哪了 · ' + escape(comp.disk) + ' 盘占用构成</h2>'
     + '<div class="comp-bar" role="img" aria-label="各用途占用占比">' + bar + '</div>'
     + '<div class="comp-legend">' + cards + '</div>' + note + '</section>';
+}
+
+function renderComposition() {
+  const slot = get('composition-slot');
+  if (!slot) return;
+  // 支持一次展示多个盘的占用构成（run.compositions）；旧数据仍读单盘 run.composition。
+  const list = (Array.isArray(run.compositions) && run.compositions.length)
+    ? run.compositions : [run.composition];
+  const comps = list.filter(c => c && Array.isArray(c.categories) && c.categories.length);
+  slot.innerHTML = comps.map(compositionCard).join('');
 }
 
 function findings() {
@@ -449,7 +461,11 @@ function findings() {
   const renderRow = row => {
     const p = proposalById.get(row.id);
     const purpose = row.purpose || row.kindName || '';
-    const purposeTag = purpose && purpose !== '一般数据目录'
+    const zhText = row.nameZh || '';
+    // 用途与中文名说的是同一件事时只留一个，避免同一行出现两段相近解释
+    const twin = zhText && purpose && (purpose.slice(0, 6) === zhText.slice(0, 6)
+      || purpose.includes(zhText.slice(0, 6)) || zhText.includes(purpose.slice(0, 6)));
+    const purposeTag = purpose && purpose !== '一般数据目录' && !twin
       ? '<span class="purpose-tag">' + escape(purpose) + '</span>' : '';
     const kids = row.childrenHint || [];
     const kidsHint = kids.length
@@ -513,22 +529,16 @@ function renderDecisions() {
   const counts = {all:run.proposals.length};
   CATEGORIES.forEach(c => counts[c.key] = run.proposals.filter(p => categoryOfProposal(p) === c.key).length);
 
-  // 两维联动：每个维度的可选项，只列在"另一维度当前选择"下确实存在的项。
-  // 若切换后另一维度的当前值已无结果，自动回退到"全部"，避免出现空列表死角。
-  const inDisk = p => activeDisk === 'all' || proposalDisk(p) === activeDisk;
+  // 单向联动：①「看哪类处理」固定全集，永不因磁盘变化；
+  // ②「看哪个盘」随①变化，只列当前分类下真实存在的盘。
   const inCat = p => activeCategory === 'all' || categoryOfProposal(p) === activeCategory;
-  if (activeCategory !== 'all' && !run.proposals.some(p => categoryOfProposal(p) === activeCategory && inDisk(p))) {
-    activeCategory = 'all';
-  }
   if (activeDisk !== 'all' && !run.proposals.some(p => proposalDisk(p) === activeDisk && inCat(p))) {
-    activeDisk = 'all';
+    activeDisk = 'all';   // 切分类后当前盘没有项，自动回退「全部磁盘」
   }
-  // 分类按钮的数量 = 在当前磁盘下的条数（磁盘=全部时就是全量）
   const catCounts = {};
-  CATEGORIES.forEach(c => catCounts[c.key] = run.proposals.filter(p =>
-    categoryOfProposal(p) === c.key && inDisk(p)).length);
+  CATEGORIES.forEach(c => catCounts[c.key] = run.proposals.filter(p => categoryOfProposal(p) === c.key).length);
   const catOpts = '<button type="button" role="tab" data-cat="all" aria-selected="' + (activeCategory === 'all')
-    + '">全部<span class="badge' + (catCounts.all > 0 ? ' warn' : '') + '">' + run.proposals.filter(inDisk).length + '</span></button>'
+    + '">全部<span class="badge' + (counts.all > 0 ? ' warn' : '') + '">' + counts.all + '</span></button>'
     + CATEGORIES.filter(c => catCounts[c.key] > 0).map(c =>
         '<button type="button" role="tab" data-cat="' + c.key + '" aria-selected="'
         + (activeCategory === c.key) + '">' + c.icon + c.label
@@ -673,7 +683,15 @@ function paintDecisionRows(rows) {
       const deleteTag = dec.action === 'delete'
         ? '<div><span class="danger-tag">将永久删除，不可恢复 · 提交时会再次确认</span></div>' : '';
       const cat = CATEGORIES.find(c => c.key === categoryOfProposal(p));
-      const catTag = '<span class="chip act">' + (cat ? cat.icon + cat.label : escape(actionName[p.action])) + '</span> ';
+      // AI 建议与你的决定分开显示：AI 原建议什么、你为什么改、为什么不在这里直接清，一屏说清。
+      const aiAct = p.recommendedAction || p.action;
+      const aiChanged = dec.action !== aiAct;
+      const aiLine = '<div class="ai-line"><span class="ai-badge">AI 建议</span>'
+        + '<b class="ai-act">' + escape(actionName[aiAct] || aiAct) + '</b>' + autoTag
+        + (aiChanged ? '<span class="changed-tag">你已改为 ' + escape(actionName[dec.action] || dec.action) + '</span>' : '')
+        + '</div>';
+      const whyLine = p.whyNotDirect
+        ? '<p class="ai-why"><span>为什么不在这里直接清</span>' + escape(p.whyNotDirect) + '</p>' : '';
       // 动作下拉：仅在后端给定的白名单内可选
       const acts = allowedActions(p).map(a =>
         '<option value="' + a + '"' + (a === dec.action ? ' selected' : '') + '>' + escape(actionName[a] || a) + '</option>').join('');
@@ -691,7 +709,7 @@ function paintDecisionRows(rows) {
         + ' 盘 · ' + escape(row.name) + '</div>'
         + (row.nameZh ? '<span class="name-zh">' + escape(row.nameZh) + '</span>' : '')
         + '<small>' + (row.pending || row.errors ? '已读取部分 ' : '当前记录 ') + size(row.bytes) + '</small></div>'
-        + '<div class="description"><b>' + catTag + autoTag + escape(actionName[dec.action] || dec.action) + '</b>' + appTag + deleteTag + '<p>'
+        + '<div class="description">' + aiLine + whyLine + appTag + deleteTag + '<p>'
         + escape(p.recommendation) + '</p><small class="impact">' + escape(p.impact) + '</small></div>'
         + '<span class="number">' + size(p.estimate) + '</span>'
         + '<label class="checkbox"><input type="checkbox" value="' + escape(p.id) + '"'
@@ -782,7 +800,7 @@ function updateVolumes(data) {
 let statusFailures = 0;
 async function readStatus() {
   try {
-    const response = await fetch('status', {cache:'no-store'});
+    const response = await callRoute('status', {cache:'no-store'});
     const data = await response.json();
     if (!response.ok) throw new Error(data.error || '连接失效');
     statusFailures = 0;
@@ -831,7 +849,7 @@ async function finishRound() {
   if (!btn || btn.disabled) return;
   btn.disabled = true;
   try {
-    const response = await fetch('finish', {method:'POST', headers:{'Content-Type':'application/json'}, body:'{}'});
+    const response = await callRoute('finish', {method:'POST', headers:{'Content-Type':'application/json'}, body:'{}'});
     const data = await response.json();
     if (!response.ok) throw new Error(data.error || '结束失败');
     btn.textContent = '已通知 WorkBuddy';
@@ -842,6 +860,36 @@ async function finishRound() {
     notify('err', '结束失败', error.message);
   }
 }
+// 提交/轮询统一走这里：先当前地址，失败则在本机固定端口段内找回 bridge。
+// 目的：WorkBuddy 重启后 bridge 换端口，用户不该为此做任何事。
+let apiBase = '';
+function viewToken() {
+  const m = location.pathname.match(/^\/([A-Za-z0-9_-]{32})\//);
+  return m ? m[1] : '';
+}
+async function callRoute(route, options) {
+  try {
+    return await fetch(apiBase + route, options);
+  } catch (error) {
+    const token = viewToken();
+    if (!token) throw error;
+    for (let port = 8791; port <= 8810; port += 1) {
+      if (String(port) === location.port) continue;
+      const base = 'http://127.0.0.1:' + port + '/' + token + '/';
+      try {
+        const probe = await fetch(base + 'status', {mode: 'no-cors'});
+        if (!probe) continue;
+      } catch (e) { continue; }
+      try {
+        const res = await fetch(base + route, options);
+        apiBase = base;
+        return res;
+      } catch (e) { /* 继续试下一个端口 */ }
+    }
+    throw new Error('本地服务连接已断开。请回到对话，说一句「重新打开工作台」即可恢复，已勾选的内容还在。');
+  }
+}
+
 async function submitSelection() {
   if (sending || submitted) return;
   const ids = selected().map(item => item.id);
@@ -890,7 +938,7 @@ async function submitSelection() {
   sending = true;
   lockSelection(true);
   try {
-    const response = await fetch('submit', {method:'POST', headers:{'Content-Type':'application/json'}, body:payload});
+    const response = await callRoute('submit', {method:'POST', headers:{'Content-Type':'application/json'}, body:payload});
     const data = await response.json();
     if (!response.ok) throw new Error(data.error || '提交失败');
     submitted = true;

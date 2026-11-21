@@ -652,6 +652,50 @@ EXT_GLOSSARY = {
 }
 
 
+# 「为什么不在这里直接清」：按应用给出具体原因，避免用户以为工具偷懒。
+# 键为 APP_TABLE/用途标签里出现的中文名片段，取不到时用 DEFAULT_WHY。
+WHY_NOT_DIRECT = {
+    "微信": "微信的图片、视频和文件由应用独占管理，直接删目录会让聊天记录里的内容显示损坏。请用微信「设置 → 存储空间」清理。",
+    "WeChat": "微信的图片、视频和文件由应用独占管理，直接删目录会让聊天记录损坏。请在微信内清理。",
+    "QQ": "QQ 的聊天记录与接收文件同理，请在 QQ 设置里清理，否则历史消息里的图片会打不开。",
+    "WPS": "自动备份和云文档缓存删掉后，未保存的文档无法恢复。请用 WPS 内的清理入口。",
+    "豆包": "清缓存不影响账号；但要保留聊天记录，请先在应用内确认已云同步。",
+    "Doubao": "清缓存不影响账号；但要保留聊天记录，请先在应用内确认已云同步。",
+    "HuggingFace": "模型权重删掉后，下次运行会重新下载，需要网络和等待时间。",
+    "huggingface": "模型权重删掉后，下次运行会重新下载，需要网络和等待时间。",
+    "Docker": "容器和镜像由 Docker 自己管理，直接删会让容器无法启动。请用 docker system prune 清理。",
+    "Edge": "浏览器配置与历史记录混在同一目录，直接删会丢书签。请在浏览器内清理缓存。",
+    "Chrome": "浏览器配置与历史记录混在同一目录，直接删会丢书签。请在浏览器内清理缓存。",
+    "Steam": "游戏本体与存档由 Steam 管理，请在客户端里卸载或移动安装目录。",
+    "NVIDIA": "显卡驱动的着色器缓存由驱动管理，删了会重建；不建议手工处理。",
+    "腾讯会议": "会议录制与本地缓存混合存放，请在应用内清理以免丢录制。",
+    "企业微信": "企业微信的聊天文件与审批附件由服务端同步，请在应用内清理。",
+    "通义千问": "清缓存不影响账号对话；如要保留本地记录请先在应用内确认同步。",
+    "Qianwen": "清缓存不影响账号对话；如要保留本地记录请先在应用内确认同步。",
+}
+DEFAULT_WHY = ("该目录由应用自己管理，工具直接删可能让应用找不到数据或丢历史记录。"
+               "建议在应用设置里清理缓存，或先备份再处理。")
+
+
+def is_container_path(path):
+    """是否为"容器目录"：盘根、或 C:\\Users\\<用户名> 这类应下钻而非整体处理的目录。"""
+    parts = [p for p in str(path or "").replace("/", "\\").split("\\") if p]
+    if len(parts) < 2:
+        return True
+    if len(parts) == 3 and parts[1].casefold() == "users":
+        return True
+    return False
+
+
+def why_not_direct(label, name=""):
+    """给出"为什么不在这里直接清理"的具体原因。"""
+    for key, text in WHY_NOT_DIRECT.items():
+        hay = f"{label or ''} {name or ''}"
+        if key and key.casefold() in hay.casefold():
+            return text
+    return DEFAULT_WHY
+
+
 def zh_name(name):
     """给英文目录/文件名一个中文解释；中文名或未收录的返回空串。"""
     key = str(name or "").strip().casefold()
@@ -863,6 +907,12 @@ def deep_inspect_topdirs(state, seconds):
             except OSError:
                 in_use = False
             row["inUse"] = in_use
+            # 用户主目录容器（C:\Users\<用户名>）与包含当前工作区的目录，
+            # 都不是"可整体处理"的对象：前者应下钻到子目录，后者误删会破坏会话。
+            if is_container_path(row["path"]) or in_use:
+                row["kind"] = "observe"
+                row["kindName"] = "容器目录（仅展示，建议逐项处理）"
+                continue
             # 目标盘：排除源盘，优先非系统盘，再按可用空间（统一 pick_target_disk）
             target = pick_target_disk(list(disks.values()), disk)
             if target and target["free"] >= size:
@@ -893,6 +943,7 @@ def deep_inspect_topdirs(state, seconds):
                                   if in_use else "")),
                     "target": "在对应应用设置里清理缓存/数据，或手动整理该目录；也可先删除可重建的子目录（如 node_modules、dist）。",
                     "needAppReset": False,
+                    "whyNotDirect": why_not_direct(label, row["name"]),
                 })
         notes.append(f"{disk} 盘：已对顶层大目录做用途识别。")
     return notes
@@ -1363,6 +1414,7 @@ def auto_plan(state, seconds):
             "impact": "缓存删除后应用首次运行会重建，可能变慢；本工具不会自动删除，请在应用内确认后操作。",
             "target": "在对应应用的设置→存储/缓存中执行清理；浏览器可用其自带的清除浏览数据功能。",
             "needAppReset": False,
+            "whyNotDirect": why_not_direct(name, row.get("kindName") or ""),
         })
         shown_cache += 1
 
