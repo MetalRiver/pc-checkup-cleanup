@@ -4,6 +4,7 @@ import csv
 import ctypes
 from ctypes import wintypes
 from collections import deque
+from contextlib import contextmanager
 import hashlib
 import json
 import os
@@ -18,6 +19,25 @@ import uuid
 from datetime import datetime
 
 BASE = Path(__file__).resolve().parent
+
+
+def storage_root(base=None):
+    base = base or BASE
+    workbuddy = base.parent.parent
+    if base.parent.name.casefold() == "skills" and workbuddy.name.casefold() == ".workbuddy":
+        return workbuddy / "disk-cleanup-data"
+    return base
+
+
+def run_roots(base=None):
+    base = base or BASE
+    return tuple(dict.fromkeys((storage_root(base) / "runs", base / "runs")))
+
+
+def run_directory(run_id, base=None):
+    roots = run_roots(base)
+    return next((root / run_id for root in roots if (root / run_id / "run.json").is_file()),
+                roots[0] / run_id)
 DAY = 86400
 REPARSE = 0x400
 ACTIONS = {
@@ -42,6 +62,20 @@ def dump(path, value):
 
 def load(path):
     return json.loads(path.read_text(encoding="utf-8-sig"))
+
+
+@contextmanager
+def run_lock(directory):
+    lock = directory / ".lock"
+    try:
+        with lock.open("x", encoding="utf-8") as handle:
+            handle.write(timestamp())
+    except FileExistsError as exc:
+        raise ValueError("本次任务正在处理或上次处理中断，请先核对执行记录。") from exc
+    try:
+        yield
+    finally:
+        lock.unlink()
 
 
 def is_link(info):
@@ -720,6 +754,7 @@ FOLDER_MIN = 200 * 1024 ** 2
 # 生成"待你决定"建议的最小体积：深度下钻能看到所有 ≥200MB 的目录，
 # 但小于 1GB 的零碎项不值得单独搬迁，只在"全部发现"展示，避免决策页被几百条小项淹没。
 PROPOSAL_MIN = 1024 ** 3
+CACHE_PROPOSAL_MIN = 64 * 1024 ** 2
 # 应用识别表：键为路径中出现的目录名片段（小写），值为展示名。
 # 命中后该类目录判定为 migrate-app，提示搬迁后需在应用内改存储位置。
 APP_TABLE = {
@@ -772,7 +807,7 @@ CACHE_HINTS = {
     "shadercache": "着色器缓存", "crashpad": "崩溃报告", "crashes": "崩溃报告",
     "npm-cache": "npm 缓存", "_cacache": "npm 缓存", "pip-cache": "pip 缓存",
     "__pycache__": "Python 缓存", "thumbcache": "缩略图缓存", "derivatedata": "派生数据",
-    "local storage": "本地存储", "service worker": "服务缓存", "gpu cache": "GPU 缓存",
+    "gpu cache": "GPU 缓存", "cache2": "浏览器磁盘缓存",
 }
 # 用户主目录下需重点下钻的应用数据目录（这些通常不在 AppData 内）。
 USER_APP_DIRS = ("wechat files", "xwechat_files", "tencent files", "downloads",
@@ -881,7 +916,7 @@ def deep_inspect_topdirs(state, seconds):
             # 系统保留目录、标准用户目录、回收站等交给原有逻辑，不重复处理
             # "users"/"programdata" 等系统容器也不应作为可搬迁/可清理项
             skip_tops = SYSTEM_TOP | USER_DIRS | {"$recycle.bin", "users", "programdata"}
-            if top in skip_tops:
+            if top in skip_tops or row.get("discovered") or managed_path(row["path"]):
                 continue
             # 已经被识别为应用/用户/缓存并生成建议的，不重复
             if any(p["id"] == row["id"] for p in state["proposals"]):
@@ -931,20 +966,8 @@ def deep_inspect_topdirs(state, seconds):
                     "needAppReset": True,
                 })
             else:
-                # 目标盘装不下或没有空盘：只给"需确认"的提示，纳入决策页但不提供搬迁路径
-                state["proposals"].append({
-                    "id": rid, "action": "app-clean", "estimate": size, "auto": True,
-                    "recommendation": (f"[{label}] {row['name']}（{size/1024**3:.1f} GiB，{basis}）"
-                                       f"最后修改 {mtime or '未知'}。没有足够空盘可承接整体搬迁，"
-                                       "请在应用内清理或在盘内整理。"),
-                    "impact": ("这是" + label + "，本工具不会自动删除。请确认内容可重建或可删除后再处理；"
-                               "若含工作区/项目源码，建议改用应用内清理或先备份。"
-                               + ("注意：该目录包含当前正在使用的工作区或工具自身，请先确认不会影响当前会话。"
-                                  if in_use else "")),
-                    "target": "在对应应用设置里清理缓存/数据，或手动整理该目录；也可先删除可重建的子目录（如 node_modules、dist）。",
-                    "needAppReset": False,
-                    "whyNotDirect": why_not_direct(label, row["name"]),
-                })
+                row["kind"] = "observe"
+                row["actionHint"] = "当前没有足够空间承接整个目录，可先下钻查看可单独处理的文件。"
         notes.append(f"{disk} 盘：已对顶层大目录做用途识别。")
     return notes
 
@@ -959,6 +982,27 @@ def match_app(text):
     return ""
 
 
+def managed_path(path):
+    """Protect OS paths and application-managed storage from raw directory moves."""
+    parts = tuple(part.casefold() for part in Path(path).parts)
+    return (len(parts) < 2 or parts[1] in SYSTEM_TOP or parts[1].startswith("$")
+            or "appdata" in parts[1:] or ".workbuddy" in parts[1:])
+
+
+def can_migrate(row):
+    path = Path(row["path"]) if row.get("path") else None
+    if (path is None or not path.is_absolute() or managed_path(path) or is_container_path(path)
+            or not row.get("directory") or path.drive[:1].upper() != row.get("disk")
+            or row.get("inUse") or row.get("pending") or row.get("errors") or row.get("links")):
+        return False
+    source = path
+    bases = [Path.cwd(), Path(__file__).parent]
+    workspace = os.environ.get("DISK_CLEANUP_WORKSPACE")
+    if workspace:
+        bases.append(Path(workspace))
+    return not any(source == base or source in base.parents or base in source.parents for base in bases)
+
+
 def classify_path(path):
     """返回 (类别, 名称)。类别：system / migrate-app / migrate-user / cache / skip。
 
@@ -968,7 +1012,9 @@ def classify_path(path):
     parts = [p.casefold() for p in Path(path).parts]
     head = parts[1] if len(parts) > 1 else ""
     tail = parts[-1] if parts else ""
-    if tail in ("pagefile.sys", "hiberfil.sys", "swapfile.sys"):
+    if head in ("program files", "program files (x86)"):
+        return "installed-app", match_app(" ".join(parts))
+    if head in SYSTEM_TOP - {"programdata"} or tail in ("pagefile.sys", "hiberfil.sys", "swapfile.sys"):
         return "system", ""
     # 缓存：仅识别应用数据区内部的缓存子目录，避免误判系统 Temp 根。
     in_appdata = any(seg in ("appdata", "programdata", ".cache") for seg in parts)
@@ -977,6 +1023,8 @@ def classify_path(path):
             (v for seg in parts for k, v in CACHE_HINTS.items() if seg == k), "应用缓存")
         owner = match_app(" ".join(parts))
         return "cache", f"{owner + ' · ' if owner else ''}{cache_name}"
+    if managed_path(path):
+        return "app-data", match_app(" ".join(parts))
     app = match_app(" ".join(parts))
     if app and len(parts) > 2:
         return "migrate-app", app
@@ -987,8 +1035,6 @@ def classify_path(path):
         return "migrate-user", ""
     if Path(path).suffix.casefold() in BIG_FILE_EXT:
         return "migrate-user", ""
-    if head in SYSTEM_TOP:
-        return "system", ""
     return "skip", ""
 
 
@@ -1053,9 +1099,11 @@ def _can_delete(row):
     严格限制：只对 migrate 类用户/应用数据目录开放；系统目录、软件安装目录、
     盘根、用户主目录容器、回收站等一律不允许。宁可少开，不可误删。
     """
-    if not row or not row.get("directory"):
+    if not row or not can_migrate(row):
         return False
     if row.get("kind") not in ("migrate-app", "migrate-user"):
+        return False
+    if re.search(r"Git|工作区|项目|笔记库|总库|虚拟环境", row.get("purpose") or ""):
         return False
     path = str(row.get("path") or "").rstrip("\\")
     if not path:
@@ -1097,6 +1145,8 @@ def finalize_proposals(state):
     """为每条建议生成后端权威的动作白名单与目标盘候选（幂等）。AI 只给建议，权限由此处决定。"""
     disks = sorted(r["disk"] for r in disk_rows() if "free" in r)
     rows = {r["id"]: r for r in state.get("found", [])}
+    state["proposals"] = [p for p in state.get("proposals", []) if p.get("id") in rows
+                          and (p["action"] != "migrate" or can_migrate(rows[p["id"]]))]
     for p in state.get("proposals", []):
         action = p.get("action")
         row = rows.get(p.get("id"), {})
@@ -1147,7 +1197,8 @@ def validate_decisions(state, decisions):
     """校验并规范化用户决策。返回非跳过项 [{id, action, targetDisk?, targetPath?}]。"""
     props = {p["id"]: p for p in state.get("proposals", [])}
     rows = {r["id"]: r for r in state.get("found", [])}
-    free = {r["disk"]: r["free"] for r in disk_rows() if "free" in r}
+    volumes = state["created"]["volumes"] if state.get("simulation") else disk_rows()
+    free = {r["disk"]: r["free"] for r in volumes if "free" in r}
     if not isinstance(decisions, list) or not decisions or len(decisions) > len(props):
         raise ValueError("决策列表无效。")
     out, seen, targets = [], set(), []
@@ -1161,6 +1212,10 @@ def validate_decisions(state, decisions):
         seen.add(pid)
         prop, row = props[pid], rows[pid]
         action = item.get("action")
+        if action == "uninstall" and prop.get("auto"):
+            raise ValueError("历史自动卸载建议已停用，请在 Windows 已安装应用中重新核实。")
+        if state.get("simulation") and action not in ("app-clean", "skip"):
+            raise ValueError("演示轮次只接受模拟的应用清理选项。")
         allowed = prop.get("allowedActions") or [prop.get("action"), "skip"]
         if action not in allowed:
             raise ValueError(f"{row.get('name')} 不支持该处理方式。")
@@ -1174,6 +1229,8 @@ def validate_decisions(state, decisions):
             if not _can_delete(row):
                 raise ValueError(f"{row.get('name')} 不允许直接删除。")
         if action == "migrate":
+            if not can_migrate(row):
+                raise ValueError(f"{row.get('name')} 不符合目录迁移条件。")
             src = (row.get("disk") or "").upper()
             target = str(item.get("targetDisk") or "").upper()
             if (target not in (prop.get("targetDisks") or []) or target == src
@@ -1215,7 +1272,7 @@ def build_composition(state, src_disk, units):
             key = "system"
         elif kind == "cache" or "缓存" in purpose:
             key = "cache"
-        elif kind in ("migrate-app",) or any(t in purpose for t in
+        elif kind in ("migrate-app", "installed-app", "app-data") or any(t in purpose for t in
                 ("Git", "Node", "Python", "项目", "工作区", "笔记", "编译", "构建")):
             key = "app"
         elif kind in ("migrate-user",) or any(t in purpose for t in
@@ -1232,7 +1289,7 @@ def build_composition(state, src_disk, units):
     categories = [{"key": k, "label": labels[k], "bytes": b["bytes"], "items": b["items"],
                    "samples": sorted(b["samples"], key=lambda s: -s["bytes"])}
                   for k, b in buckets.items()]
-    state["composition"] = {"disk": src_disk, "scannedBytes": total, "categories": categories,
+    return {"disk": src_disk, "scannedBytes": total, "categories": categories,
                             "note": "按目录用途归类统计（逻辑大小，含硬链接去重）；仅列识别到的部分。"}
 
 
@@ -1249,9 +1306,11 @@ def auto_plan(state, seconds):
         return notes
     known = {row["path"].casefold(): row for row in state["found"]}
     candidates = {}       # 可迁移 / 可清理候选
-    units = []            # 占用构成归类单元
+    top_rows = {row["path"].casefold().rstrip("\\"): row for row in state["found"]
+                if Path(row["path"]).parent == Path(Path(row["path"]).anchor)}
+    refined_units = {}
 
-    def put(path, size, kind, name):
+    def put(path, size, kind, name, observed=None):
         key = str(path).casefold()
         if key in known:
             row = known[key]
@@ -1262,9 +1321,9 @@ def auto_plan(state, seconds):
             # 否则 C 盘下钻出的应用被记成 "C:" 或错记到 D 盘。
             m = re.match(r"^([A-Za-z]):", str(path))
             disk = m.group(1).upper() if m else src_disk
-            row = {"id": uuid.uuid4().hex, "disk": disk, "path": str(path),
+            row = {**(observed or {}), "id": uuid.uuid4().hex, "disk": disk, "path": str(path),
                    "name": Path(path).name, "bytes": size, "coverage": "自动识别",
-                   "directory": Path(path).is_dir(), "links": 0, "errors": 0, "pending": False,
+                   "directory": observed["directory"] if observed else Path(path).is_dir(),
                    "discovered": True}
             # 登记到"全部发现"，让下钻结果在页面可见；同一路径只登记一次。
             if not any(r.get("path", "").casefold() == key for r in state["found"]):
@@ -1303,11 +1362,12 @@ def auto_plan(state, seconds):
         try:
             if not folder.is_dir() or is_link(folder.lstat()):
                 return []
-            disk = str(folder)[:2].upper() if re.match(r"^[A-Za-z]:", str(folder)) else src_disk
-            children, _ = inspect_volume(disk, seconds, folder)
+            disk = folder.drive[:1].upper()
+            children, warnings = inspect_volume(disk, seconds, folder)
         except OSError:
             return []
-        refined_done.add(str(folder).casefold().rstrip("\\") + "\\")
+        key = str(folder).casefold().rstrip("\\")
+        refined_done.add(key)
         out = []
         for child in children:
             size = child["bytes"]
@@ -1315,28 +1375,53 @@ def auto_plan(state, seconds):
                 continue
             kind, name = classify_path(child["path"])
             out.append((child["path"], size, kind, name))
-            if size < FOLDER_MIN:
-                continue
-            # 大项（≥1GB）且可处理的才生成建议；其余（含小项、系统/软件目录）
-            # 都登记到"全部发现"并附用途说明——看得见，但不塞进决策页。
-            if size >= PROPOSAL_MIN and kind in ("migrate-app", "migrate-user", "cache"):
-                put(Path(child["path"]), size, kind, name)
-            else:
+            if ((kind == "cache" and size >= CACHE_PROPOSAL_MIN)
+                    or (size >= PROPOSAL_MIN and kind in ("migrate-app", "migrate-user")
+                        and can_migrate(child))):
+                put(Path(child["path"]), size, kind, name, child)
+            elif size >= FOLDER_MIN:
                 register_discovered(child["path"], size, kind, name)
+        if key in top_rows and out and not warnings:
+            refined_units[key] = out
         return out
 
-    # 1) 顶层构成：卷根直接子项已含递归合计，先整体归类。
-    #    应用/用户/缓存类顶层目录若下钻失败，需以整体兜底，避免这部分空间凭空消失。
-    refined_prefixes = []
     refined_done = set()
-    for row in list(state["found"]):
-        if row["disk"] != src_disk:
-            continue
-        kind, name = classify_path(row["path"])
-        if row.get("directory") and kind in ("migrate-app", "migrate-user", "cache"):
-            refined_prefixes.append(str(row["path"]).casefold().rstrip("\\") + "\\")
-            continue
-        units.append((row["path"], row["bytes"], kind, name))
+
+    def probe_cache(folder):
+        try:
+            ordinary_path(folder)
+            rows, _ = inspect_volume(folder.drive[:1].upper(), seconds, folder)
+        except OSError:
+            return
+        size = sum(row["bytes"] for row in rows)
+        if size >= CACHE_PROPOSAL_MIN:
+            kind, label = classify_path(folder)
+            put(folder, size, kind, label)
+
+    def scan_browser_caches(local):
+        for browser_root in (local / "Google/Chrome/User Data", local / "Microsoft/Edge/User Data"):
+            try:
+                ordinary_path(browser_root)
+                profiles = list(browser_root.iterdir())
+            except OSError:
+                continue
+            for profile in profiles:
+                if profile.name != "Default" and not re.fullmatch(r"Profile \d+", profile.name):
+                    continue
+                for cache_name in ("Cache", "Code Cache", "GPUCache"):
+                    probe_cache(profile / cache_name)
+
+    def scan_application_caches(appdata):
+        try:
+            ordinary_path(appdata)
+            folders = list(appdata.iterdir())
+        except OSError:
+            return
+        for folder in folders:
+            if not match_app(folder.name):
+                continue
+            for cache_name in ("Cache", "Code Cache", "GPUCache", "ShaderCache"):
+                probe_cache(folder / cache_name)
 
     # 2) 用户目录：对每个目标盘的每个用户账户下钻 AppData 三处 + 常用主目录。
     #    不能只扫最紧张盘——否则最紧张盘是 D 时，C 盘的微信/Docker/豆包等应用数据会全部漏掉。
@@ -1349,11 +1434,14 @@ def auto_plan(state, seconds):
                 if user.name.casefold() in ("public", "default", "default user", "all users"):
                     continue
                 for sub in ("AppData/Local", "AppData/Roaming", "AppData/LocalLow"):
-                    units.extend(scan_folder(user / sub))
+                    appdata = user / sub
+                    scan_folder(appdata)
+                    scan_application_caches(appdata)
+                scan_browser_caches(user / "AppData/Local")
                 for sub in USER_APP_DIRS:
                     folder = user / sub
                     if folder.is_dir():
-                        units.extend(scan_folder(folder))
+                        scan_folder(folder)
         except OSError as exc:
             notes.append(f"{drill_disk} 盘用户目录枚举受限：{exc}")
 
@@ -1368,46 +1456,38 @@ def auto_plan(state, seconds):
 
     # 4) 所有目标盘的所有顶层大目录都下钻细分——深度清理不是只针对某一盘。
     #    用户选了哪些盘，就对哪些盘逐一深入，避免 D/E 盘只剩顶层容器、看不到里面是什么。
-    for row in list(state["found"]):
+    for row in top_rows.values():
         if row["disk"] not in state["targets"] or not row.get("directory"):
             continue
         size = row.get("bytes") or 0
         if size < FOLDER_MIN:
             continue
-        kind, name = classify_path(row["path"])
-        prefix = str(row["path"]).casefold().rstrip("\\") + "\\"
+        prefix = str(row["path"]).casefold().rstrip("\\")
         if prefix in refined_done:
             continue
-        got = scan_folder(Path(row["path"]))
-        if not got:
-            # 下钻失败：以整体兜底计入，避免这部分空间消失
-            if prefix not in refined_done:
-                units.append((row["path"], row["bytes"], kind, name))
-                refined_done.add(prefix)
-
-    # 对第 1 步跳过的顶层目录，若其前缀从未成功细分，同样兜底。
-    for prefix in refined_prefixes:
-        if prefix in refined_done:
-            continue
-        for row in state["found"]:
-            if str(row["path"]).casefold().rstrip("\\") + "\\" == prefix:
-                kind, name = classify_path(row["path"])
-                units.append((row["path"], row["bytes"], kind, name))
-                break
+        if classify_path(row["path"])[0] != "system":
+            scan_folder(Path(row["path"]))
 
     # 4.5) 先给顶层大目录打用途标签，再生成占用构成——否则用途标签晚于构成写入，
     #      会导致 D/E 盘整盘落进"其他未分类"。此步必须在 build_composition 之前。
     notes.extend(deep_inspect_topdirs(state, seconds))
-    build_composition(state, src_disk, units)
+    units_by_disk = {disk: [] for disk in state["targets"]}
+    for key, row in top_rows.items():
+        kind, name = classify_path(row["path"])
+        size = row["bytes"]
+        children = refined_units.get(key, [])
+        children_size = sum(item[1] for item in children)
+        if children_size <= size:
+            units_by_disk[row["disk"]].extend(children)
+            size -= children_size
+        if size:
+            units_by_disk[row["disk"]].append((row["path"], size, kind, name))
+    state["compositions"] = [build_composition(state, disk, units_by_disk[disk]) for disk in state["targets"]]
+    state["composition"] = next(comp for comp in state["compositions"] if comp["disk"] == src_disk)
 
     # 5) 缓存：只提示用应用内清理，绝不自动删除。
     cache_rows = [(r, s, n) for r, s, k, n in candidates.values() if k == "cache"]
-    shown_cache = 0
     for row, size, name in sorted(cache_rows, key=lambda item: -item[1]):
-        if shown_cache >= 8:
-            break
-        if row["id"] not in known:
-            state["found"].append(row)
         state["proposals"].append({
             "id": row["id"], "action": "app-clean", "estimate": size, "auto": True,
             "recommendation": f"发现 {name}（约 {size / 1024**3:.2f} GiB）。建议在该应用内执行清理，或用系统磁盘清理处理。",
@@ -1416,20 +1496,20 @@ def auto_plan(state, seconds):
             "needAppReset": False,
             "whyNotDirect": why_not_direct(name, row.get("kindName") or ""),
         })
-        shown_cache += 1
 
     # 6) 可迁移项：需有空白盘承接，且空间足够。
     migrate_rows = [(r, s, k, n) for r, s, k, n in candidates.values() if k in ("migrate-app", "migrate-user")]
-    for row, size, kind, name in sorted(migrate_rows, key=lambda item: -item[1])[:12]:
-        dst, target = _migration_target(state, src_disk, row["path"])
+    for row, size, kind, name in sorted(migrate_rows, key=lambda item: -item[1]):
+        if not can_migrate(row):
+            continue
+        source_disk = row["disk"]
+        dst, target = _migration_target(state, source_disk, row["path"])
         if not dst:
             notes.append(f"未找到可承接 {row['name']} 的空白盘，已跳过迁移建议。")
-            break
+            continue
         if target["free"] < size:
             notes.append(f"{target['disk']} 盘剩余不足，无法承接 {row['name']}。")
             continue
-        if row["id"] not in known:
-            state["found"].append(row)
         app = name if kind == "migrate-app" else ""
         if kind == "migrate-app" and app:
             note = (f"这是 {app} 的数据或安装目录。搬迁后必须在该应用的设置里修改存储位置"
@@ -1438,10 +1518,10 @@ def auto_plan(state, seconds):
             note = "这是用户数据，搬迁通常无需改应用设置；路径已整体保留到目标盘。"
         state["proposals"].append({
             "id": row["id"], "action": "migrate", "estimate": size,
-            "recommendation": f"把 {row['name']}（{size / 1024**3:.1f} GiB）从 {src_disk} 盘迁移到 {target['disk']} 盘的空白位置，腾出源盘空间。",
+            "recommendation": f"把 {row['name']}（{size / 1024**3:.1f} GiB）从 {source_disk} 盘迁移到 {target['disk']} 盘的空白位置，腾出源盘空间。",
             "impact": note,
             "target": f"目标位置：{dst}（{target['disk']} 盘当前可用 {target['free'] / 1024**3:.1f} GiB）",
-            "targetPath": dst, "sourceDisk": src_disk, "targetDisk": target["disk"], "auto": True,
+            "targetPath": dst, "sourceDisk": source_disk, "targetDisk": target["disk"], "auto": True,
             "needAppReset": bool(app),
         })
 
@@ -1469,17 +1549,23 @@ def auto_plan(state, seconds):
                 "impact": "系统级改动，请确认使用场景后操作；改动前建议记录原设置。",
                 "target": advice, "auto": True,
             })
-    rid = uuid.uuid4().hex
-    state["found"].append({"id": rid, "disk": state["targets"][0], "path": "C:\\Windows\\WinSxS",
-                           "name": "Windows 组件存储", "bytes": 0, "coverage": "系统组件存储 · 大小待测",
-                           "directory": True, "links": 0, "errors": 0, "pending": False})
-    state["proposals"].append({
-        "id": rid, "action": "system", "estimate": None,
-        "recommendation": "组件存储保存了被更新替换的旧版本，通常可回收数 GB。",
-        "impact": "清理后无法卸载此前已安装的旧更新；系统本身不受影响。",
-        "target": "管理员命令行执行：Dism /Online /Cleanup-Image /StartComponentCleanup",
-        "auto": True,
-    })
+    windows = Path(os.environ.get("SystemRoot", r"C:\Windows"))
+    disk = windows.drive[:1].upper()
+    component_store = windows / "WinSxS"
+    if disk in state["targets"] and component_store.is_dir():
+        row = next((r for r in state["found"] if Path(r["path"]) == component_store), None)
+        if row is None:
+            row = {"id": uuid.uuid4().hex, "disk": disk, "path": str(component_store),
+                   "name": "Windows 组件存储", "bytes": 0, "coverage": "系统组件存储 · 大小待测",
+                   "directory": True, "links": 0, "errors": 0, "pending": False}
+            state["found"].append(row)
+        state["proposals"].append({
+            "id": row["id"], "action": "system", "estimate": None,
+            "recommendation": "使用 Windows 存储设置查看可清理的更新文件。",
+            "impact": "可清理内容和范围以 Windows 显示为准。",
+            "target": "在设置 → 系统 → 存储 → 临时文件查看 Windows 更新清理。",
+            "auto": True,
+        })
     # 全局去重：下钻与路径识别可能把同一路径登记多次（大小写/来源不同），
     # 保留 bytes 最大的一条，并同步删掉指向被合并行的建议。
     dedup_found(state)
@@ -1523,8 +1609,11 @@ def write_page(path, template, state, history_link):
 
 
 def emit(run_dir, state, *, publish=False):
-    state["archived"] = (BASE / "disk_cleanup_decision.legacy.html").is_file()
-    if state.get("mode") == "deep" and "deep" not in state:
+    if state.get("simulation"):
+        publish = False
+    root = storage_root()
+    state["archived"] = (root / "disk_cleanup_decision.legacy.html").is_file()
+    if state.get("mode") == "deep" and "deep" not in state and not state.get("simulation"):
         finalize_proposals(state)
     # 给所有英文目录/文件名补中文解释，页面直接展示，避免满屏英文看不懂。
     for row in state.get("found", []):
@@ -1535,13 +1624,14 @@ def emit(run_dir, state, *, publish=False):
     write_page(run_dir / "disk_cleanup_decision.html", template, state,
                "../../disk_cleanup_decision.legacy.html")
     if publish:
-        write_page(BASE / "disk_cleanup_decision.html", template, state,
+        root.mkdir(parents=True, exist_ok=True)
+        write_page(root / "disk_cleanup_decision.html", template, state,
                    "disk_cleanup_decision.legacy.html")
 
 
 def create_run(args, disks):
     run_id = datetime.now().strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:8]
-    directory = BASE / "runs" / run_id
+    directory = run_roots()[0] / run_id
     state = {"runId": run_id, "mode": args.command, "targets": disks, "created": sample(disks),
              "revision": uuid.uuid4().hex, "proposals": [], "found": [], "warnings": []}
     if args.command in ("scan", "deep"):
@@ -1551,9 +1641,9 @@ def create_run(args, disks):
                      scanFull=(args.seconds <= 0))
         if args.command == "deep":
             warnings.extend(auto_plan(state, args.seconds))
+        add_application_usage(state)
     if args.command in ("basic", "deep"):
         state["basic"] = execute_basic(disks)
-    record_baseline(state["created"])
     directory.mkdir(parents=True, exist_ok=True)
     emit(directory, state, publish=args.command in ("scan", "deep"))
     report = write_report(directory, state, publish=False) if args.command == "basic" else None
@@ -1562,6 +1652,38 @@ def create_run(args, disks):
                       "report": (report or {}).get("html"),
                       "basic": state.get("basic"), "decisions": len(state["proposals"])},
                      ensure_ascii=False))
+
+
+def create_batch_demo():
+    """Generate a selectable plan without scanning real disks or using real paths."""
+    run_id = datetime.now().strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:8]
+    directory = run_roots()[0] / run_id
+    rows = [{"id": f"demo-{index}", "disk": "C", "name": name,
+             "path": f"C:\\磁盘清理演示\\{name}", "bytes": index * 1024**2,
+             "directory": True, "coverage": "演示数据"}
+            for index, name in enumerate(("演示缓存 A", "演示缓存 B", "演示缓存 C"), 1)]
+    proposals = [{"id": row["id"], "action": "app-clean", "estimate": row["bytes"],
+                  "recommendation": row["name"], "impact": "虚拟数据，无实际磁盘操作。",
+                  "target": "由演示流程模拟处理", "allowedActions": ["app-clean", "skip"],
+                  "recommendedAction": "app-clean"} for row in rows]
+    state = {"runId": run_id, "revision": uuid.uuid4().hex, "mode": "deep", "simulation": True,
+             "targets": ["C"], "created": {"time": timestamp(),
+                                           "volumes": [{"disk": "C", "total": 100 * 1024**3, "free": 32 * 1024**3}]},
+             "proposals": proposals, "found": rows, "warnings": ["演示模式，磁盘数据为虚拟样例。"]}
+    directory.mkdir(parents=True)
+    emit(directory, state)
+    print(json.dumps({"runId": run_id, "runFile": str(directory / "run.json"), "simulation": True},
+                     ensure_ascii=False))
+
+
+def add_application_usage(state):
+    from app_usage import usage_review
+
+    try:
+        state["applications"] = sorted(usage_review(), key=lambda app: app["name"].casefold())
+    except OSError:
+        state["applications"] = []
+        state["warnings"].append("本次读取 Windows 应用盘点时遇到权限或系统错误。")
 
 
 def add_review(state, source):
@@ -1604,6 +1726,8 @@ def drill(state, item_id, seconds):
 
 def migrate_target(state, row, proposal):
     """把 row.path 真实迁移到 proposal.targetPath，robocopy /MOVE 后校验。"""
+    if not can_migrate(row):
+        raise OSError("源路径受保护、扫描不完整或不符合目录迁移条件。")
     source = Path(row["path"])
     raw_dst = proposal.get("targetPath")
     if not raw_dst or not isinstance(raw_dst, str):
@@ -1644,7 +1768,7 @@ def apply_selection(directory, state, source):
     expected = hashlib.sha256(json.dumps(fields, sort_keys=True).encode()).hexdigest()
     if choice.get("reviewDigest") != expected:
         raise ValueError("回执缺少或校验值不匹配，请从原对话重新打开本轮工作台。")
-    if "deep" in state or state["mode"] != "deep":
+    if "deep" in state or state.get("finalizedAt") or state["mode"] != "deep":
         raise ValueError("该次深度选择已经提交，或任务类型不符。")
     if choice.get("runId") != state["runId"] or choice.get("revision") != state["revision"]:
         raise ValueError("所选方案版本或条目无效，请打开本轮最新页面。")
@@ -1681,12 +1805,14 @@ def apply_selection(directory, state, source):
                     f"本轮选择含重叠目标：{name_a}（{a}）与 {name_b}（{b}）"
                     "是同一路径或父子目录，请返回页面只保留其中一项。"
                 )
-    before = sample(state["targets"])
+    before = task_sample(state)
     entries = []
     for proposal, row, decision in planned:
         action = decision["action"]
         entry = {"id": row["id"], "name": row["name"], "disk": row["disk"], "action": action}
-        if action == "recycle":
+        if state.get("simulation"):
+            entry.update(status="完成", note="模拟处理完成，磁盘数据为虚拟样例。")
+        elif action == "recycle":
             try:
                 if (recycle_bin(row["disk"]) != proposal["observed"]
                         or recycle_inventory(row["disk"], account_sid())[0] != row["fingerprint"]):
@@ -1713,8 +1839,7 @@ def apply_selection(directory, state, source):
                     raise ValueError("该目录不在允许直接清理的范围内。")
                 if not target.exists():
                     raise ValueError("目录已不存在，可能已被移动或删除。")
-                if is_link(target.lstat()):
-                    raise ValueError("目标是链接，已拒绝删除。")
+                ordinary_path(target)
                 freed = row.get("bytes") or 0
                 shutil.rmtree(target)
                 if target.exists():
@@ -1727,14 +1852,14 @@ def apply_selection(directory, state, source):
             entry.update(status="待 WorkBuddy 打开指定入口", note=proposal["target"])
         entries.append(entry)
     deep = {"before": before, "selected": ids, "entries": entries,
-            "after": sample(state["targets"])}
+            "after": task_sample(state)}
     state["deep"] = deep
     state["decisions"] = choice.get("decisions")
     emit(directory, state)
 
 
 def verify(state, receipt):
-    if "deep" not in state:
+    if "deep" not in state or state.get("finalizedAt"):
         raise ValueError("该任务尚未提交深度选择。")
     if receipt:
         entries = {row["id"]: row for row in state["deep"]["entries"]
@@ -1746,13 +1871,77 @@ def verify(state, receipt):
             if result.get("status") not in ("完成", "部分完成", "跳过", "未完成"):
                 raise ValueError("回填状态无效。")
             row.update(status=result["status"], note=str(result.get("note", ""))[:600])
-    state["deep"].setdefault("reviews", []).append(sample(state["targets"]))
+    state["deep"].setdefault("reviews", []).append(task_sample(state))
+
+
+def task_sample(state):
+    if state.get("simulation"):
+        return {**state["created"], "time": timestamp()}
+    return sample(state["targets"])
+
+
+def batch_records(state):
+    records = [batch["deep"] for batch in state.get("batchHistory", [])]
+    return records + ([state["deep"]] if "deep" in state else [])
+
+
+def available_proposals(state):
+    """Exclude handled items and their ancestors/descendants from the next selection."""
+    selected = {item for batch in batch_records(state) for item in batch.get("selected", [])}
+    paths = {row["id"]: Path(row["path"]) for row in state["found"]}
+    handled = [paths[item] for item in selected if item in paths]
+    return [proposal for proposal in state["proposals"]
+            if proposal["id"] in paths and proposal["id"] not in selected
+            and not any(parent == paths[proposal["id"]]
+                        or parent in paths[proposal["id"]].parents
+                        or paths[proposal["id"]] in parent.parents for parent in handled)]
+
+
+def batch_progress(state):
+    deep = state.get("deep")
+    pending = [entry["id"] for entry in (deep or {}).get("entries", [])
+               if str(entry.get("status", "")).startswith("待 WorkBuddy")]
+    phase = "finished" if state.get("finalizedAt") else "awaiting_selection"
+    if deep and phase != "finished":
+        phase = "awaiting_manual" if pending else "ready" if deep.get("reviews") else "awaiting_verification"
+    return {"runId": state["runId"], "revision": state["revision"],
+            "batch": len(state.get("batchHistory", [])) + 1, "phase": phase,
+            "remainingCount": len(available_proposals(state)), "pendingManual": pending,
+            "simulation": bool(state.get("simulation"))}
+
+
+def advance_batch(directory, state):
+    if batch_progress(state)["phase"] != "ready":
+        raise ValueError("本批须先处理并复核，才能进入下一批。")
+    remaining = available_proposals(state)
+    if not remaining:
+        raise ValueError("没有剩余可处理项，请结束本次任务。")
+    state.setdefault("initialProposals", state["proposals"])
+    state.setdefault("batchHistory", []).append({
+        "revision": state["revision"], "deep": state.pop("deep"),
+        "decisions": state.pop("decisions", None),
+    })
+    state.update(proposals=remaining, revision=uuid.uuid4().hex)
+    emit(directory, state, publish=True)
+
+
+def finalize_run(directory, state, *, leave_remaining=False):
+    progress = batch_progress(state)
+    if leave_remaining and progress["phase"] == "awaiting_selection":
+        state["finishReason"] = "no-selection"
+    elif progress["phase"] not in ("ready", "finished"):
+        raise ValueError("本批须先处理并复核，才能结束本次任务。")
+    report = write_report(directory, state, publish=not state.get("simulation"))
+    if not state.get("finalizedAt"):
+        state["finalizedAt"] = timestamp()
+        dump(directory / "run.json", state)
+    return {**report, "batches": len(batch_records(state)), "simulation": progress["simulation"]}
 
 
 REPORT_SVG = "清理成果报告.svg"
 REPORT_HTML = "清理成果报告.html"
-BASELINE = BASE / "baseline.json"
 ACTION_LABEL = {"recycle": "清空回收站", "recycle-review": "清空回收站", "migrate": "迁移目录",
+                "delete": "永久删除",
                 "uninstall": "卸载应用", "app-clean": "应用内清理", "system": "系统调整",
                 "read-space": "读取空间"}
 STATUS_COLOR = {"完成": "#0f766e", "有残留": "#b45309", "未确认完成": "#b91c1c",
@@ -1778,7 +1967,8 @@ def _volumes(sample_value):
 
 def _round_sample(state):
     """本轮收尾的实际读数：优先最后一次复核，其次执行后，最后基础清理后。"""
-    deep = state.get("deep") or {}
+    records = batch_records(state)
+    deep = records[-1] if records else {}
     if deep.get("reviews"):
         return deep["reviews"][-1]
     if deep.get("after"):
@@ -1788,62 +1978,72 @@ def _round_sample(state):
     return state.get("created")
 
 
-def record_baseline(created):
-    """首次扫描时记录基线，之后所有报告都以它为累计起点。"""
-    if BASELINE.is_file() or not (created or {}).get("volumes"):
-        return
-    dump(BASELINE, {"time": created.get("time"), "volumes": created["volumes"],
-                    "note": "首次扫描自动记录的累计基线，请勿手工改写"})
+def report_time(value):
+    try:
+        return datetime.fromisoformat(value).astimezone()
+    except (TypeError, ValueError):
+        return None
+
+
+def daily_totals(state, directory, final):
+    cutoff = report_time(final.get("time"))
+    totals = {}
+    if cutoff is None:
+        return totals, ""
+    if state.get("simulation"):
+        return totals, cutoff.date().isoformat()
+    others = [state]
+    seen = {directory.name}
+    for path in (p for root in run_roots() for p in root.glob("*/run.json")):
+        if path.parent.name in seen:
+            continue
+        try:
+            other = load(path)
+        except (OSError, ValueError):
+            continue
+        if isinstance(other, dict) and not other.get("simulation"):
+            others.append(other)
+            seen.add(path.parent.name)
+    for other in others:
+        basic = other.get("basic") or {}
+        samples = [(basic.get("before"), basic.get("after"))] if any(
+            group.get("done") for group in basic.get("groups", [])) else []
+        samples.extend((batch.get("before"), batch["reviews"][-1])
+                       for batch in batch_records(other) if batch.get("entries") and batch.get("reviews"))
+        for before, after in samples:
+            finished = report_time((after or {}).get("time"))
+            if finished is None or finished.date() != cutoff.date() or finished > cutoff:
+                continue
+            start, end = _volumes(before), _volumes(after)
+            for disk in start.keys() & end.keys():
+                totals[disk] = totals.get(disk, 0) + end[disk]["free"] - start[disk]["free"]
+    return totals, cutoff.date().isoformat()
 
 
 def report_data(state, directory):
     final = _round_sample(state)
     start = state.get("created") or final
-    before = (state.get("deep") or {}).get("before") or (state.get("basic") or {}).get("before") or start
-    baseline, rounds, objects = start, 1, 0
-    for path in sorted((BASE / "runs").glob("*/run.json")):
-        try:
-            other = load(path)
-        except Exception:
-            continue
-        created = other.get("created") or {}
-        if created.get("volumes") and str(created.get("time", "")) and \
-                (not baseline.get("time") or created["time"] < baseline.get("time", "")):
-            baseline = created
-        deep = other.get("deep") or {}
-        basic = other.get("basic") or {}
-        if deep.get("entries") or basic.get("groups"):
-            rounds += 1
-        objects += sum(1 for e in deep.get("entries", []) if e.get("status") == "完成")
-        objects += sum(int(g.get("done") or 0) for g in basic.get("groups", []))
-    rounds = max(1, rounds)
-    if BASELINE.is_file():
-        try:
-            recorded = load(BASELINE)
-        except Exception:
-            recorded = None
-        if (recorded or {}).get("volumes"):
-            baseline = recorded
-    start_vol, base_vol, final_vol = _volumes(start), _volumes(baseline), _volumes(final)
+    batches = batch_records(state)
+    daily, report_date = daily_totals(state, directory, final)
+    start_vol, final_vol = _volumes(start), _volumes(final)
     disks = [d for d in state.get("targets", []) if d in final_vol]
     this_round = sum(final_vol[d]["free"] - start_vol.get(d, final_vol[d])["free"] for d in disks)
-    base_disks = [d for d in disks if d in base_vol]
-    cumulative = sum(final_vol[d]["free"] - base_vol[d]["free"] for d in base_disks)
-    entries = list((state.get("deep") or {}).get("entries") or [])
-    selected = set((state.get("deep") or {}).get("selected") or [])
+    entries = [entry for batch in batches for entry in batch.get("entries", [])]
+    selected = {item for batch in batches for item in batch.get("selected", [])}
     found = {row["id"]: row for row in state.get("found", [])}
     pending = [{"name": found.get(p["id"], {}).get("name") or p.get("recommendation", "未命名项目"),
                 "action": ACTION_LABEL.get(p["action"], p["action"])}
-               for p in state.get("proposals", []) if p["id"] not in selected]
+               for p in state.get("initialProposals", state.get("proposals", [])) if p["id"] not in selected]
     basic_done = sum(int(g.get("done") or 0) for g in (state.get("basic") or {}).get("groups", []))
     basic_bytes = sum(int(g.get("removed") or 0) for g in (state.get("basic") or {}).get("groups", []))
     return {
         "runId": state.get("runId", ""), "mode": state.get("mode", ""),
         "start": str(start.get("time", ""))[:10], "end": str((final or {}).get("time", ""))[:16].replace("T", " "),
-        "disks": disks, "start_vol": start_vol, "before_vol": _volumes(before),
-        "final_vol": final_vol, "base_vol": base_vol, "this_round": this_round,
-        "cumulative": cumulative, "has_baseline": bool(base_disks),
-        "rounds": rounds, "objects": objects, "entries": entries, "pending": pending,
+        "disks": disks, "start_vol": start_vol,
+        "final_vol": final_vol, "this_round": this_round,
+        "report_date": report_date, "daily": sum(daily.values()), "entries": entries, "pending": pending,
+        "batches": len(batches), "simulation": bool(state.get("simulation")),
+        "finish_reason": state.get("finishReason"),
         "basic_done": basic_done, "basic_bytes": basic_bytes,
         "basic_groups": [g for g in (state.get("basic") or {}).get("groups", []) if g.get("done")],
         "done": sum(1 for e in entries if e.get("status") == "完成"),
@@ -1853,33 +2053,31 @@ def report_data(state, directory):
 
 
 def render_report(data):
-    total_base = sum(data["base_vol"][d]["free"] for d in data["disks"] if d in data["base_vol"])
-    total_now = sum(data["final_vol"][d]["free"] for d in data["disks"])
-    big = _signed_gb(data["cumulative"] if data["has_baseline"] else data["this_round"])
+    big = _signed_gb(data["daily"])
     big_width = len(big) * 49
-    scope = " + ".join(data["disks"]) or "本机"
-    if data["has_baseline"]:
-        sub = f"{scope} 合计可用：{_gb(total_base)} → {_gb(total_now)} GB"
-        kind = "磁盘实际空出 · 累计"
-    else:
-        sub = f"{scope} 本轮执行前后：{_gb(sum(v['free'] for v in data['before_vol'].values()))} → {_gb(total_now)} GB"
-        kind = "磁盘实际空出 · 本轮"
-    title = "基础清理成果报告" if data["mode"] == "basic" else "磁盘清理成果报告"
-    meta = f"{data['start']} 首次记录 → {data['end']} 实测　·　累计口径自首次扫描起算"
+    sub = f"{data['report_date']} · 截至本报告的清理实测合计"
+    kind = "今日累计净变化"
+    title = "磁盘清理演示报告" if data["simulation"] else (
+        "基础清理成果报告" if data["mode"] == "basic" else "磁盘清理成果报告")
+    receipt_caption = f'{data["batches"]} 批处理结果' if data["batches"] else (
+        "本次未提交深度清理" if data["finish_reason"] == "no-selection" else "逐项执行结果")
+    measurement_note = ("本图使用演示数据，未操作真实磁盘。" if data["simulation"] else
+                        "本轮为任务开始至最后一批复核的可用空间差，可能包含后台写入影响。")
+    meta = f"本次任务 {data['start']} → {data['end']} 复核　·　今日累计按复核日期归集"
 
     cards = []
     for i, disk in enumerate(data["disks"][:3]):
         x = 88 + i * 482
         after = data["final_vol"][disk]
-        base_free = data["base_vol"].get(disk, after)["free"]
+        base_free = data["start_vol"].get(disk, after)["free"]
         delta = after["free"] - base_free
         ratio = after["free"] / after["total"] if after.get("total") else 0
         color = "#0f766e" if delta >= 0 else "#b91c1c"
         bar = "#b91c1c" if ratio < 0.15 else ("#b45309" if ratio < 0.30 else "#14b8a6")
         cards.append(f'''  <rect x="{x}" y="470" width="458" height="110" rx="14" fill="#fbfdff" stroke="#e7edf4"/>
   <text x="{x + 22}" y="502" font-size="18" font-weight="800" fill="#16223a">{disk} 盘</text>
-  <text x="{x + 436}" y="502" font-size="16" font-weight="800" fill="{color}" text-anchor="end">{_signed_gb(delta)} GB</text>
-  <text x="{x + 22}" y="532" font-size="13" fill="#5b6b84">起始 {_gb(base_free)} → 当前 {_gb(after["free"])} GB</text>
+  <text x="{x + 436}" y="502" font-size="16" font-weight="800" fill="{color}" text-anchor="end">{_signed_gb(delta)} GiB</text>
+  <text x="{x + 22}" y="532" font-size="13" fill="#5b6b84">起始 {_gb(base_free)} → 当前 {_gb(after["free"])} GiB</text>
   <rect x="{x + 22}" y="548" width="414" height="8" rx="4" fill="#e6edf5"/>
   <rect x="{x + 22}" y="548" width="{max(4, round(414 * ratio))}" height="8" rx="4" fill="{bar}"/>
   <text x="{x + 22}" y="574" font-size="11.5" fill="#8492a6">当前可用占比 {ratio * 100:.0f}%</text>''')
@@ -1900,7 +2098,7 @@ def render_report(data):
         rows.append(f'''  <circle cx="86" cy="{y - 5}" r="4" fill="#0f766e"/>
   <text x="102" y="{y}" font-size="13.5" fill="#334155">基础清理 · {_cut(group.get("name", ""), 15)}</text>
   <text x="352" y="{y}" font-size="12.5" fill="#8492a6">{group.get("disk", "")} 盘 · {group.get("done", 0)} 个文件</text>
-  <text x="556" y="{y}" font-size="12.5" font-weight="600" fill="#0f766e">{_gb(group.get("removed", 0))} GB</text>''')
+  <text x="556" y="{y}" font-size="12.5" font-weight="600" fill="#0f766e">{_gb(group.get("removed", 0))} GiB</text>''')
     if not rows:
         rows.append('  <text x="86" y="700" font-size="13" fill="#8492a6">本轮没有产生需要执行的项目，'
                     '基础清理结果见上方统计。</text>')
@@ -1937,7 +2135,7 @@ def render_report(data):
   <rect x="56" y="152" width="700" height="240" rx="20" fill="#ecfdf5" stroke="#99f6e4" stroke-width="1.5"/>
   <text x="88" y="196" font-size="13.5" font-weight="700" fill="#0d9488">{kind}</text>
   <text x="86" y="292" font-size="82" font-weight="800" fill="#0f766e" letter-spacing="-3">{big}</text>
-  <text x="{86 + big_width}" y="292" font-size="30" font-weight="700" fill="#0f766e">GB</text>
+  <text x="{86 + big_width}" y="292" font-size="30" font-weight="700" fill="#0f766e">GiB</text>
   <line x1="88" y1="316" x2="724" y2="316" stroke="#99f6e4" stroke-width="1.5" stroke-dasharray="4 4"/>
   <text x="88" y="352" font-size="14" font-weight="700" fill="#43536b">{sub}</text>
 
@@ -1945,7 +2143,7 @@ def render_report(data):
   <text x="804" y="192" font-size="15" font-weight="800" fill="#16223a">本轮成果</text>
   <line x1="804" y1="206" x2="1516" y2="206" stroke="#eef2f7" stroke-width="1.5"/>
   <text x="804" y="268" font-size="34" font-weight="800" fill="#0f766e">{_signed_gb(data["this_round"])}</text>
-  <text x="804" y="296" font-size="13" fill="#5b6b84">本轮实测释放 GB</text>
+  <text x="804" y="296" font-size="13" fill="#5b6b84">本次任务净变化 GiB</text>
   <text x="1004" y="268" font-size="34" font-weight="800" fill="#16223a">{data["done"]}</text>
   <text x="1004" y="296" font-size="13" fill="#5b6b84">已完成项目</text>
   <text x="1204" y="268" font-size="34" font-weight="800" fill="#b45309">{data["warn"] + data["manual"]}</text>
@@ -1953,7 +2151,7 @@ def render_report(data):
   <text x="1404" y="268" font-size="34" font-weight="800" fill="#16223a">{len(data["pending"])}</text>
   <text x="1404" y="296" font-size="13" fill="#5b6b84">本轮未处理</text>
   <line x1="804" y1="322" x2="1516" y2="322" stroke="#eef2f7" stroke-width="1.5"/>
-  <text x="804" y="352" font-size="13" fill="#5b6b84">基础清理：处理 {data["basic_done"]} 个缓存文件，释放 {_gb(data["basic_bytes"])} GB</text>
+  <text x="804" y="352" font-size="13" fill="#5b6b84">基础清理处理 {data["basic_done"]} 个缓存文件，文件逻辑大小 {_gb(data["basic_bytes"])} GiB</text>
 
   <rect x="56" y="412" width="1488" height="200" rx="20" fill="#ffffff" stroke="#e7edf4"/>
   <text x="88" y="450" font-size="15" font-weight="800" fill="#16223a">各盘可用空间对比</text>
@@ -1962,7 +2160,7 @@ def render_report(data):
 
   <rect x="56" y="632" width="940" height="200" rx="20" fill="#ffffff" stroke="#e7edf4"/>
   <text x="86" y="672" font-size="15" font-weight="800" fill="#16223a">本轮回执</text>
-  <text x="966" y="672" font-size="12" fill="#8492a6" text-anchor="end">逐项执行结果</text>
+  <text x="966" y="672" font-size="12" fill="#8492a6" text-anchor="end">{receipt_caption}</text>
 {"".join(rows)}
 
   <rect x="1024" y="632" width="520" height="200" rx="20" fill="#ffffff" stroke="#e7edf4"/>
@@ -1971,7 +2169,7 @@ def render_report(data):
 {"".join(pending)}
 
   <line x1="56" y1="860" x2="1544" y2="860" stroke="#eef2f7" stroke-width="1.5"/>
-  <text x="56" y="890" font-size="12" fill="#8492a6">口径：本轮数字为执行前后实测差值；累计以首次扫描基线为准，不含后台写入波动。</text>
+  <text x="56" y="890" font-size="12" fill="#8492a6">{measurement_note}</text>
   <text x="1544" y="890" font-size="12" fill="#8492a6" text-anchor="end">途有引力 · 磁盘体检与清理</text>
 </svg>
 '''
@@ -1981,28 +2179,26 @@ def write_report(directory, state, *, publish=True):
     data = report_data(state, directory)
     svg = render_report(data)
     (directory / REPORT_SVG).write_text(svg, encoding="utf-8")
-    total_base = sum(data["base_vol"][d]["free"] for d in data["disks"] if d in data["base_vol"])
-    total_now = sum(data["final_vol"][d]["free"] for d in data["disks"])
-    hint = (f"累计口径：{data['start']} 首次记录 → {data['end']} 实测，合计 "
-            f"{_signed_gb(data['cumulative'])} GB（{_gb(total_base)} → {_gb(total_now)} GB）"
-            if data["has_baseline"] else
-            f"本轮口径：{data['start']} → {data['end']}，实测 {_signed_gb(data['this_round'])} GB")
+    hint = (f"{data['report_date']} 今日累计净变化 {_signed_gb(data['daily'])} GiB"
+            f" · 本次任务 {_signed_gb(data['this_round'])} GiB")
     html = f'''<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8"><title>清理成果报告</title>
 <style>html,body{{margin:0;padding:0}}body{{background:#eef2f8;min-height:100vh;display:flex;align-items:flex-start;justify-content:center;padding:24px 16px 40px;font-family:"Microsoft YaHei",sans-serif}}
 .wrap{{width:1280px;max-width:100%}}.wrap img{{width:100%;height:auto;display:block;border-radius:26px;box-shadow:0 18px 50px rgba(20,32,56,.16)}}
 .hint{{margin:14px 2px 0;font-size:12px;color:#8492a6;text-align:center}}</style></head>
 <body><div class="wrap"><img src="{REPORT_SVG}" alt="磁盘清理成果报告"><p class="hint">{hint}</p></div></body></html>'''
     (directory / REPORT_HTML).write_text(html, encoding="utf-8")
-    if publish:
-        (BASE / REPORT_SVG).write_text(svg, encoding="utf-8")
-        (BASE / REPORT_HTML).write_text(html, encoding="utf-8")
+    if publish and not state.get("simulation"):
+        root = storage_root()
+        root.mkdir(parents=True, exist_ok=True)
+        (root / REPORT_SVG).write_text(svg, encoding="utf-8")
+        (root / REPORT_HTML).write_text(html, encoding="utf-8")
     return {"svg": str(directory / REPORT_SVG), "html": str(directory / REPORT_HTML)}
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("command", choices=["drives", "scan", "basic", "deep", "drill", "recommend",
-                                            "apply", "verify", "report"])
+                                            "apply", "verify", "report", "demo"])
     parser.add_argument("--drives", nargs="+", help="目标盘，例如 C D")
     parser.add_argument("--seconds", type=int, default=0,
                         help="每盘扫描预算秒数；0 表示不限时完整扫描（默认，真·全盘）")
@@ -2014,6 +2210,9 @@ def main():
         parser.error("该脚本运行于 Windows。")
     if args.command == "drives":
         print(json.dumps(disk_rows(), ensure_ascii=False))
+        return
+    if args.command == "demo":
+        create_batch_demo()
         return
     if args.command in ("basic", "deep", "scan"):
         available = [r["disk"] for r in disk_rows() if "free" in r]
@@ -2028,21 +2227,18 @@ def main():
     if args.command == "drill" and (not args.id or args.seconds < 0):
         parser.error("细分排查请提供 --id 和非负扫描预算（0 表示完整细分）。")
     run_path = args.run.resolve()
-    if run_path.name != "run.json" or run_path.parent.parent != BASE / "runs":
+    if run_path.name != "run.json" or run_path.parent.parent not in run_roots():
         parser.error("请选择此工作台生成的本轮 run.json。")
-    lock = run_path.parent / ".lock"
-    try:
-        with lock.open("x", encoding="utf-8") as handle:
-            handle.write(timestamp())
-    except FileExistsError:
-        parser.error("本轮正在处理或上次处理中断。请核对记录后再用新一轮继续。")
-    try:
+    with run_lock(run_path.parent):
         state = load(run_path)
         if args.command == "report":
-            if "deep" not in state and "basic" not in state:
+            if not batch_records(state) and "basic" not in state:
                 parser.error("该轮只做了扫描，没有可汇总的清理结果。")
-            print(write_report(run_path.parent, state, publish=True)["html"])
+            print(write_report(run_path.parent, state, publish=bool(state.get("finalizedAt"))
+                               or state["mode"] == "basic")["html"])
             return
+        if args.command in ("drill", "recommend") and (state.get("batchHistory") or state.get("simulation")):
+            parser.error("这是续批或演示轮次，请使用工作台给出的当前候选项。")
         if args.command == "apply":
             apply_selection(run_path.parent, state, args.input)
         elif args.command == "recommend":
@@ -2054,9 +2250,7 @@ def main():
         emit(run_path.parent, state, publish=True)
         print(run_path.parent / "disk_cleanup_decision.html")
         if args.command == "verify":
-            print(write_report(run_path.parent, state, publish=True)["html"])
-    finally:
-        lock.unlink()
+            print(write_report(run_path.parent, state, publish=False)["html"])
 
 
 if __name__ == "__main__":

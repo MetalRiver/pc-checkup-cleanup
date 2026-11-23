@@ -1,20 +1,26 @@
 """WorkBuddy project MCP. The browser submits decisions; only the waiting chat receives them."""
 import concurrent.futures
+from contextlib import contextmanager
 import hashlib
 import json
+import msvcrt
+import os
 from pathlib import Path
 import re
 import secrets
+import subprocess
 import sys
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import parse_qs
+import winreg
 
 import cleanup
 
 BASE = Path(__file__).resolve().parent
-TTL = 7200  # 2 小时；用户需逐条核对几十项，15 分钟太短
+SUBMISSION_SECONDS = 4 * 60 * 60
+EXTENSION_SECONDS = 2 * 60 * 60
+WAIT_SECONDS = 15
 # 端口固定：原来用 0 让系统随机分配，WorkBuddy/MCP 一重启端口就变，
 # 用户手里已打开的页面立刻失效（Failed to fetch）。改为固定起点 + 有限递增。
 PORT_BASE = 8791
@@ -25,54 +31,93 @@ server = None
 stdout_lock = threading.Lock()
 
 
+class ReviewUpdated(ValueError):
+    pass
+
+
 def session_file(run_id):
-    return BASE / "runs" / run_id / "bridge_session.json"
+    return cleanup.run_directory(run_id, BASE) / "bridge_session.json"
+
+
+@contextmanager
+def review_lock(run_id):
+    """Serialize first submission and session changes across local MCP processes."""
+    with session_file(run_id).with_name(".review.lock").open("a+b") as lock:
+        lock.seek(0)
+        msvcrt.locking(lock.fileno(), msvcrt.LK_LOCK, 1)
+        try:
+            yield
+        finally:
+            lock.seek(0)
+            msvcrt.locking(lock.fileno(), msvcrt.LK_UNLCK, 1)
+
+
+def saved_meta(run_id):
+    try:
+        meta = cleanup.load(session_file(run_id))
+    except FileNotFoundError:
+        return {}
+    if (not isinstance(meta, dict) or meta.get("runId") != run_id
+            or not re.fullmatch(r"[a-f0-9]{32}", str(meta.get("handle")))
+            or not re.fullmatch(r"[A-Za-z0-9_-]{32}", str(meta.get("view")))
+            or not re.fullmatch(r"[a-f0-9]{32}", str(meta.get("choiceHandle", meta.get("handle"))))
+            or not isinstance(meta.get("expiresAt"), (int, float))):
+        raise ValueError("本轮工作台会话记录无效。")
+    return meta
 
 
 def save_session(s):
-    """把会话关键信息落盘，供进程重启后恢复（页面不至于彻底失效）。"""
-    if s.get("test") or not s.get("plan"):
+    if s["test"]:
         return
-    run_id = s["plan"].get("runId")
-    if not run_id or str(run_id).startswith("test-"):
-        return
-    try:
-        cleanup.dump(session_file(run_id), {
-            "view": s["view"], "handle": s["handle"], "runId": run_id,
-            "expiresAt": s.get("expires_at") or 0,
-        })
-    except OSError:
-        pass
+    run_id = s["plan"]["runId"]
+    cleanup.dump(session_file(run_id), {
+        "view": s["view"], "handle": s["handle"], "runId": run_id,
+        "revision": s["plan"]["revision"], "reviewDigest": s["digest"],
+        "expiresAt": s["expires_at"], "choiceHandle": s["choice_handle"],
+        "received": s["received"], "finished": s["finished"],
+    })
 
 
-def restore_sessions():
-    """启动时把未过期的会话从磁盘恢复，让旧页面仍能提交。"""
-    runs = BASE / "runs"
-    if not runs.is_dir():
-        return
-    now = time.time()
-    for path in sorted(runs.glob("*/bridge_session.json")):
+def session_state(plan, test, meta):
+    handle = meta.get("handle") or secrets.token_hex(16)
+    return {"view": meta.get("view") or secrets.token_urlsafe(24), "handle": handle,
+            "plan": plan, "digest": digest(plan), "test": test, "event": threading.Event(),
+            "choice": None, "choice_handle": meta.get("choiceHandle") or handle,
+            "received": bool(meta.get("received")), "finish": threading.Event(),
+            "finished": bool(meta.get("finished")),
+            "expires_at": meta.get("expiresAt", time.time() + SUBMISSION_SECONDS)}
+
+
+def load_choice(s, *, legacy=False):
+    plan = s["plan"]
+    path = choice_path(plan["runId"], s["choice_handle"])
+    paths = sorted(path.parent.glob("choice-*.json")) if legacy else [path]
+    matches = []
+    for candidate in paths:
+        match = re.fullmatch(r"choice-([a-f0-9]{32})", candidate.stem)
+        if not match:
+            continue
         try:
-            meta = cleanup.load(path)
-        except (OSError, ValueError):
+            choice = cleanup.load(candidate)
+        except FileNotFoundError:
             continue
-        if not isinstance(meta, dict) or meta.get("expiresAt", 0) <= now:
-            continue
-        run_id = meta.get("runId")
-        if not run_id or run_id in {s["plan"].get("runId") for s in sessions.values()}:
-            continue
-        try:
-            plan = read_run(run_id)
-        except ValueError:
-            continue
-        handle = meta.get("handle") or secrets.token_hex(16)
-        sessions[handle] = {"view": meta.get("view") or secrets.token_hex(16), "handle": handle,
-                            "plan": plan, "digest": digest(plan), "test": False,
-                            "event": threading.Event(), "ids": None, "decisions": None,
-                            "received": False, "finish": threading.Event(), "finished": False,
-                            "expires": time.monotonic() + TTL,
-                            "expires_at": meta.get("expiresAt") or (now + TTL)}
-
+        if not isinstance(choice, dict):
+            raise ValueError("选择回执格式无效。")
+        if (choice.get("runId") != plan["runId"] or choice.get("revision") != plan["revision"]
+                or choice.get("reviewDigest") != s["digest"]):
+            if legacy:
+                continue
+            raise ValueError("选择回执与本轮方案不一致。")
+        if "decisions" in choice and choice.get("decisionDigest") != cleanup.decisions_digest(choice["decisions"]):
+            raise ValueError("选择回执的动作校验值不匹配。")
+        validate_selection(s, choice, saved=True)
+        matches.append((match[1], choice))
+    if matches:
+        handle, choice = next((entry for entry in matches if entry[0] == s["choice_handle"]), matches[0])
+        if any(item != choice for _, item in matches):
+            raise ValueError("本轮存在内容不同的历史提交，请回到原对话核对回执。")
+        s["choice_handle"], s["choice"] = handle, choice
+        s["event"].set()
 
 def start_server():
     """固定端口优先；被占用时有限递增，避免随机端口导致旧页面失效。"""
@@ -91,7 +136,6 @@ def start_server():
     if server is None:
         raise ValueError(f"无法占用 {PORT_BASE}-{PORT_BASE + PORT_TRIES - 1} 任一端口：{last}")
     threading.Thread(target=server.serve_forever, daemon=True).start()
-    restore_sessions()
     return server
 
 
@@ -100,17 +144,18 @@ def digest(plan):
     return hashlib.sha256(json.dumps(fields, sort_keys=True).encode()).hexdigest()
 
 
-def read_run(run_id):
+def check_run_id(run_id):
     if not isinstance(run_id, str) or not re.fullmatch(r"\d{8}-\d{6}-[a-f0-9]{8}", run_id):
         raise ValueError("请提供当前任务生成的轮次 ID。")
-    path = BASE / "runs" / run_id / "run.json"
+
+
+def read_run(run_id):
+    check_run_id(run_id)
+    path = cleanup.run_directory(run_id, BASE) / "run.json"
     cleanup.ordinary_path(path)
     data = cleanup.load(path)
     if data["runId"] != run_id or data["mode"] != "deep":
         raise ValueError("请打开本轮深度清理结果。")
-    # 兼容旧轮次：补齐 v1.4 的决策白名单/目标盘字段（幂等）。
-    if "deep" not in data:
-        cleanup.finalize_proposals(data)
     return data
 
 
@@ -130,85 +175,95 @@ def test_plan():
 
 
 def choice_path(run_id, handle):
-    return BASE / "runs" / run_id / ("choice-" + handle + ".json")
+    return cleanup.run_directory(run_id, BASE) / ("choice-" + handle + ".json")
 
 
-def session_for(handle, *, allow_submitted=False, touch=False):
+def session_for(handle):
     s = sessions.get(handle)
     if s is None:
-        raise ValueError("本轮交互连接已失效，请从当前 WorkBuddy 对话重新打开。")
-    if time.monotonic() >= s["expires"]:
-        # 已提交并已落盘的会话仍可领取一次，避免用户勾选因超时丢失。
-        if allow_submitted and s["ids"] and not s["test"] \
-                and choice_path(s["plan"]["runId"], handle).is_file():
-            s["expires"] = time.monotonic() + TTL
+        # The pending MCP call can be retried after the process exits, without opening a second session.
+        paths = (path for root in cleanup.run_roots(BASE) for path in root.glob("*/bridge_session.json"))
+        for path in paths:
+            try:
+                meta = saved_meta(path.parent.name)
+            except (OSError, ValueError):
+                continue
+            if meta.get("handle") == handle:
+                start_server()
+                s = sessions[handle] = session_state(read_run(path.parent.name), False, meta)
+                break
         else:
-            raise ValueError("本轮交互连接已过期，请从当前 WorkBuddy 对话重新打开。")
-    # 页面每 2 秒轮询 status 时滑动续期：只要用户还开着页面，就不超时。
-    if touch:
-        s["expires"] = time.monotonic() + TTL
+            raise ValueError("本轮交互连接已失效，请从当前 WorkBuddy 对话重新打开。")
+    if not s["test"]:
+        plan = s["plan"]
+        meta = saved_meta(plan["runId"])
+        if (meta.get("handle") != handle or meta.get("reviewDigest", s["digest"]) != s["digest"]
+                or meta.get("revision", plan["revision"]) != plan["revision"]):
+            raise ReviewUpdated("本批工作台已更新。请回原对话查看当前批次。")
+        s["expires_at"] = meta["expiresAt"]
+        s["choice_handle"] = meta.get("choiceHandle") or handle
+        s["received"] = bool(meta.get("received"))
+        s["finished"] = bool(meta.get("finished"))
+        if s["choice"] is None:
+            load_choice(s, legacy="revision" not in meta)
+        if s["finished"]:
+            s["finish"].set()
     return s
 
 
-def open_review(run_id=None, test=False, recover=False):
+def expired(s):
+    return s["choice"] is None and time.time() >= s["expires_at"]
+
+
+def open_review(run_id=None, test=False, recover=False, open_browser=False):
     if test is not True and test is not False and test is not None:
         raise ValueError("test 必须是布尔值。")
-    if recover is not True and recover is not False:
+    if recover is not True and recover is not False and recover is not None:
         raise ValueError("recover 必须是布尔值。")
-    if (test is True) and run_id:
+    if type(open_browser) is not bool:
+        raise ValueError("open_browser 必须是布尔值。")
+    if test and run_id:
         raise ValueError("测试任务单独运行。")
-    state = test_plan() if test else read_run(run_id)
-    if "deep" in state or not state["proposals"]:
-        raise ValueError("本轮已提交，或没有需要决定的项目。")
-    if not test:
-        # 把补齐后的白名单字段落盘，确保页面、桥接与应用端 reviewDigest 完全一致。
-        cleanup.dump(BASE / "runs" / run_id / "run.json", state)
-    handle, view = secrets.token_hex(16), secrets.token_urlsafe(24)
-    global server
     with guard:
-        for key in list(sessions):
-            if sessions[key]["expires"] <= time.monotonic():
-                del sessions[key]
-        if not test:
-            # 同一 runId 已有会话：默认幂等返回原页面；recover=true 时作废旧 handle 并新建。
-            existing = [item for item in sessions.values() if item["plan"]["runId"] == run_id]
-            if existing and not recover:
-                old = existing[0]
-                return {"page": f"http://127.0.0.1:{server.server_port}/{old['view']}/",
-                        "handle": old["handle"], "expiresInSeconds": max(1, int(old["expires"] - time.monotonic())),
-                        "recovered": True,
-                        "next": "这是本轮已存在的工作台，直接展示此页面并用同一 handle 调用 wait_review。若需强制接管，传 recover=true。"}
-            for item in existing:
-                item["expires"] = time.monotonic() - 1
-                item["superseded"] = True
-        if server is None:
-            start_server()
-        sessions[handle] = {"view": view, "handle": handle, "plan": state,
-                            "digest": digest(state), "test": test,
-                            "event": threading.Event(), "ids": None, "decisions": None,
-                            "received": False, "finish": threading.Event(), "finished": False,
-                            "expires": time.monotonic() + TTL,
-                            "expires_at": time.time() + TTL}
-        url = f"http://127.0.0.1:{server.server_port}/{view}/"
-        save_session(sessions[handle])
-        if not test:
-            template = (BASE / "disk_cleanup_template.html").read_text(encoding="utf-8-sig")
-            bound = {**state, "reviewUrl": url}
-            cleanup.write_page(BASE / "runs" / run_id / "disk_cleanup_decision.html", template,
-                               bound, "../../disk_cleanup_decision.legacy.html")
-            root = BASE / "disk_cleanup_decision.html"
-            if root.exists():
-                match = re.search(r'<script type="application/json" id="run">(.*?)</script>',
-                                  root.read_text(encoding="utf-8-sig"), re.S)
-                if match and json.loads(match[1]).get("runId") == run_id:
-                    cleanup.write_page(root, template, bound, "disk_cleanup_decision.legacy.html")
-    return {"page": url, "handle": handle, "expiresInSeconds": TTL,
-            "next": "立即在当前对话展示可点击的 page 链接，然后调用 wait_review 等待用户选择。不要结束这一轮。"}
+        if test:
+            s = session_state(test_plan(), True, {})
+            recovered = False
+        else:
+            check_run_id(run_id)
+            run_path = cleanup.run_directory(run_id, BASE) / "run.json"
+            cleanup.ordinary_path(run_path)
+            with review_lock(run_id):
+                state = read_run(run_id)
+                if state.get("finalizedAt"):
+                    return report_result(state)
+                if not state["proposals"]:
+                    raise ValueError("本轮没有需要决定的项目。")
+                meta = saved_meta(run_id)
+                if meta.get("revision", state["revision"]) != state["revision"]                         or meta.get("reviewDigest", digest(state)) != digest(state):
+                    meta = {}
+                s = session_state(state, False, meta)
+                load_choice(s, legacy="revision" not in meta)
+                if "deep" in state and (not s["choice"] or not s["received"]):
+                    raise ValueError("本轮已有执行记录，请查看本轮成果。")
+                recovered = bool(s["choice"] or (meta and not expired(s) and not recover))
+                if not recovered:
+                    if any("allowedActions" not in proposal for proposal in state["proposals"]):
+                        cleanup.finalize_proposals(state)
+                        cleanup.dump(run_path, state)
+                    s = session_state(state, False, {})
+                if not recovered or "revision" not in meta:
+                    save_session(s)
+        start_server()
+        sessions[s["handle"]] = s
+        url = f"http://127.0.0.1:{server.server_port}/{s['view']}/"
+    return {"page": url, "handle": s["handle"], "expiresAt": s["expires_at"], "openIn": "workbuddy",
+            "expiresInSeconds": max(0, int(s["expires_at"] - time.time())),
+            "recovered": recovered, "submitted": s["choice"] is not None,
+            "next": "在 WorkBuddy 右侧内置浏览器导航到 page，原对话保留链接并立即调用 wait_review，保持本轮执行。"}
 
-
-def validate_selection(s, payload):
+def validate_selection(s, payload, *, saved=False):
     plan = s["plan"]
-    if not s["test"]:
+    if not s["test"] and not saved:
         current = read_run(plan["runId"])
         if "deep" in current or digest(current) != s["digest"]:
             raise ValueError("本轮方案或执行状态已变化，请重新打开。")
@@ -218,78 +273,118 @@ def validate_selection(s, payload):
             or not isinstance(ids, list) or not ids or len(ids) > len(by_id)
             or not all(isinstance(i, str) and i in by_id for i in ids) or len(ids) != len(set(ids))):
         raise ValueError("选择与本轮条目不匹配。")
-    # 新协议：逐项动作/目标盘必须落在后端白名单内，目标盘有效、空间充足。
     if "decisions" in payload:
         decisions = payload["decisions"]
-        # decisionDigest 由服务端依据 decisions 生成并写入回执，前端无需也无法伪造。
-        if not isinstance(decisions, list) or len(decisions) < len(ids):
-            raise ValueError("决策条目无效。")
-        by_decision = {d.get("id"): d for d in decisions if isinstance(d, dict)}
-        if set(by_decision) != set(ids):
+        if (not isinstance(decisions, list) or len(decisions) != len(ids)
+                or not all(isinstance(d, dict) and isinstance(d.get("id"), str)
+                           and d.get("action") != "skip" for d in decisions)
+                or {d["id"] for d in decisions} != set(ids)):
             raise ValueError("勾选与决策条目不一致。")
-        if not s["test"]:
+        if not s["test"] and not saved:
             cleanup.validate_decisions(plan, decisions)
+        if s["test"] and any(d["action"] != "read-space" for d in decisions):
+            raise ValueError("此工作台仅用于读取可用空间。")
     rows = {r["id"]: r for r in plan["found"]}
     chosen = [(Path(rows[i]["path"]), rows[i].get("name") or rows[i]["path"]) for i in ids]
     for n, (a, name_a) in enumerate(chosen):
         for b, name_b in chosen[n + 1:]:
             if a == b or a in b.parents or b in a.parents:
-                raise ValueError(
-                    f"选择中含有重叠目标：{name_a}（{a}）与 {name_b}（{b}）是同一路径或父子目录，"
-                    "请返回页面只保留其中一项后重新提交。"
-                )
+                raise ValueError(f"选择中含有重叠目标：{name_a}（{a}）与 {name_b}（{b}）。")
     return ids
+
+
+def save_choice(s, payload):
+    if not isinstance(payload, dict):
+        raise ValueError("选择无效。")
+    ids = validate_selection(s, payload, saved=s["choice"] is not None)
+    choice = {"runId": s["plan"]["runId"], "revision": s["plan"]["revision"],
+              "ids": ids, "reviewDigest": s["digest"]}
+    if "decisions" in payload:
+        choice["decisions"] = payload["decisions"]
+        choice["decisionDigest"] = cleanup.decisions_digest(choice["decisions"])
+    if s["choice"] is not None:
+        if choice != s["choice"]:
+            raise ValueError("本轮已保存一份选择。请回到原对话查看已提交的动作和目标盘。")
+        return
+    if expired(s):
+        raise ValueError("本轮提交时间已到，请回到原对话重新打开工作台。")
+    if not s["test"]:
+        cleanup.dump(choice_path(choice["runId"], s["choice_handle"]), choice)
+    s["choice"] = choice
+    s["event"].set()
 
 
 def wait_review(handle):
     with guard:
-        s = session_for(handle, allow_submitted=True)
-    if not s["event"].wait(15):
-        session_for(handle, allow_submitted=True)
-        return {"state": "等待用户提交", "next": "在同一对话再次调用 wait_review。"}
-    with guard:
-        s = session_for(handle, allow_submitted=True)
-        plan = s["plan"]
-        choice = {"runId": plan["runId"], "revision": plan["revision"], "ids": s["ids"],
-                  "reviewDigest": s["digest"]}
-        if s.get("decisions") is not None:
-            choice["decisions"] = s["decisions"]
-            choice["decisionDigest"] = s.get("decisionDigest")
-        if s.get("receipt"):
-            return s["receipt"]
-        validate_selection(s, choice)
-        rows = {r["id"]: r for r in plan["found"]}
-        by_id = {p["id"]: p for p in plan["proposals"]}
-        decision_map = {d["id"]: d for d in (s.get("decisions") or [])}
-        selected = []
-        for pid in s["ids"]:
-            base = dict(by_id[pid])
-            d = decision_map.get(pid)
-            if d and d.get("action"):
-                base["action"] = d["action"]
-                if d.get("targetDisk"):
-                    base["targetDisk"] = d["targetDisk"]
-            base["disk"] = rows[pid]["disk"]
-            base["path"] = rows[pid]["path"]
-            selected.append(base)
-        result = {"state": "已收到", "runId": plan["runId"], "selected": selected}
-        if s["test"]:
-            result["next"] = "在对话回复已收到只读项目，再调用 read_test_space(handle)，将实测结果回复用户。"
-        else:
-            directory = BASE / "runs" / plan["runId"]
-            receipt = directory / ("choice-" + handle + ".json")
-            cleanup.dump(receipt, choice)
-            result.update(runFile=str(directory / "run.json"), choiceFile=str(receipt),
-                          next="先在本对话回复收到的盘和动作，再按技能用这份 choiceFile 调用 apply 并复核。")
-        s["received"] = True
-        s["receipt"] = result
-        return result
+        s = session_for(handle)
+    deadline = time.monotonic() + WAIT_SECONDS
+    while True:
+        with guard:
+            s = session_for(handle)
+            if not s["test"]:
+                current = read_run(s["plan"]["runId"])
+                if current["revision"] != s["plan"]["revision"]:
+                    raise ReviewUpdated("已进入下一批，请打开当前工作台。")
+                if current.get("finalizedAt"):
+                    return report_result(current)
+            if s["choice"] is not None:
+                if s["test"]:
+                    return review_result(s)
+                run_id = s["plan"]["runId"]
+                with review_lock(run_id):
+                    return review_result(session_for(handle))
+            if expired(s):
+                return {"state": "已过期", "next": "如需继续，用同一 run_id 重新打开工作台。"}
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return {"state": "等待用户提交", "expiresAt": s["expires_at"],
+                        "next": "保持本轮对话并再次调用 wait_review；此状态只是单次等待结束。"}
+        s["event"].wait(min(1, remaining))
 
+
+def review_result(s):
+    plan = s["plan"]
+    choice = s["choice"]
+    run_id = plan["runId"]
+    result = {"state": "已收到", "runId": run_id, "selected": []}
+    if not s["test"]:
+        current = read_run(run_id)
+        if current["revision"] != plan["revision"]:
+            raise ReviewUpdated("该回执属于之前的批次，请回原对话查看当前批次。")
+        if "deep" in current:
+            return {"state": "已有执行记录", **cleanup.batch_progress(current),
+                    "next": "调用 batch_status 查看本批状态，按原任务继续。"}
+        if digest(current) != s["digest"]:
+            raise ValueError("本轮方案已变化，已保存的选择需要重新核对。")
+    rows = {r["id"]: r for r in plan["found"]}
+    decisions = {d["id"]: d for d in choice.get("decisions", [])}
+    proposals = {p["id"]: p for p in plan["proposals"]}
+    for item_id in choice["ids"]:
+        row = rows[item_id]
+        selected = {**proposals[item_id], **decisions.get(item_id, {}),
+                    "disk": row["disk"], "path": row["path"]}
+        if selected["action"] == "migrate":
+            selected["targetPath"] = cleanup.make_target_path(row["disk"], selected["targetDisk"], row["path"])
+        else:
+            selected.pop("targetDisk", None)
+            selected.pop("targetPath", None)
+        result["selected"].append(selected)
+    if s["test"]:
+        result["next"] = "在对话回复收到只读项目，再调用 read_test_space(handle)。"
+    else:
+        directory = cleanup.run_directory(run_id, BASE)
+        result.update(runFile=str(directory / "run.json"),
+                      choiceFile=str(choice_path(run_id, s["choice_handle"])),
+                      next="在对话逐项核对用户选择。若恢复了旧任务，先核对是否已尝试执行，再按技能处理。")
+    if not s["received"]:
+        s["received"] = True
+        save_session(s)
+    return result
 
 def read_test_space(handle):
     with guard:
         s = session_for(handle)
-        if not s["test"] or not s["received"] or s["ids"] != ["read-space"]:
+        if not s["test"] or not s["received"] or s["choice"]["ids"] != ["read-space"]:
             raise ValueError("该只读测试尚未收到选择。")
         if "result" not in s:
             sample = cleanup.sample(s["plan"]["targets"])
@@ -300,33 +395,192 @@ def read_test_space(handle):
 
 
 def wait_finish(handle):
-    """执行与复核完成后，等待用户在页面点「结束本轮清理」，再返回成果报告路径。"""
-    with guard:
-        s = session_for(handle, allow_submitted=True)
-        if s["test"] or not s["received"]:
-            raise ValueError("该任务尚未进入执行阶段，无需等待结束确认。")
-    if not s["finish"].wait(15):
+    """Compatibility tool for clients that use the workbench finish button."""
+    deadline = time.monotonic() + WAIT_SECONDS
+    while True:
         with guard:
-            session_for(handle, allow_submitted=True)
-        return {"state": "等待用户确认结束", "next": "在同一对话再次调用 wait_finish；用户尚未点结束本轮。"}
+            s = session_for(handle)
+            if s["test"] or not s["received"]:
+                raise ValueError("该任务尚未进入执行阶段，无需等待结束确认。")
+            state = read_run(s["plan"]["runId"])
+            if s["finished"] or state.get("finalizedAt"):
+                return report_result(state)
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return {"state": "等待用户确认结束", "next": "在原对话询问是否结束或处理剩余项。"}
+        s["finish"].wait(min(1, remaining))
+
+
+def report_result(state):
+    directory = cleanup.run_directory(state["runId"], BASE)
+    page, image = directory / cleanup.REPORT_HTML, directory / cleanup.REPORT_SVG
+    if not page.is_file() or not image.is_file():
+        raise ValueError("本次成果报告缺失，请重新生成。")
+    return {**cleanup.batch_progress(state), "phase": "finished", "state": "本轮已结束",
+            "finishReason": state.get("finishReason"),
+            "batches": len(cleanup.batch_records(state)), "report": str(page), "reportImage": str(image),
+            "next": "在原对话展示 reportImage 指向的报告图，并附上 report 的可打开版本。"}
+
+
+def batch_status(run_id):
+    state = read_run(run_id)
+    if already_finished(state):
+        return report_result(state)
+    return {**cleanup.batch_progress(state), "runFile": str(cleanup.run_directory(run_id, BASE) / "run.json")}
+
+
+def already_finished(state):
+    if state.get("finalizedAt"):
+        return True
+    meta = saved_meta(state["runId"])
+    return bool(state.get("deep") and meta.get("finished") and meta.get("revision") == state["revision"])
+
+
+def apply_batch_decision(run_id, revision, decision):
+    """Persist the confirmed choice while holding the cross-process review lock."""
+    directory = cleanup.run_directory(run_id, BASE)
+    with cleanup.run_lock(directory):
+        state = read_run(run_id)
+        # A retry after advancement can reopen the already-created next batch.
+        history = state.get("batchHistory", [])
+        if (decision == "continue" and "deep" not in state and history
+                and revision == history[-1]["revision"]):
+            return
+        if state["revision"] != revision:
+            raise ReviewUpdated("这是之前批次的选择，请核对当前批次后再决定。")
+        if already_finished(state):
+            if decision == "finish" or (decision == "skip" and state.get("finishReason") == "no-selection"):
+                return report_result(state)
+            raise ValueError("本次任务已结束。")
+        if decision in ("finish", "skip"):
+            meta = saved_meta(run_id)
+            if decision == "skip":
+                current = session_state(state, False, meta)
+                load_choice(current, legacy="revision" not in meta)
+                if current["choice"] is not None:
+                    raise ValueError("当前批次已收到提交，请先核对处理状态。")
+            cleanup.finalize_run(directory, state, leave_remaining=decision == "skip")
+            return report_result(state)
+        cleanup.advance_batch(directory, state)
+
+
+def batch_decision(run_id, revision, decision, open_browser=False):
+    check_run_id(run_id)
+    if decision not in ("continue", "finish", "skip"):
+        raise ValueError("请选择 continue、finish 或 skip。")
+    if type(open_browser) is not bool:
+        raise ValueError("open_browser 必须是布尔值。")
     with guard:
-        state = read_run(s["plan"]["runId"])
-        run_id = s["plan"]["runId"]
-        directory = BASE / "runs" / run_id
-        report_html = directory / cleanup.REPORT_HTML
-        latest = BASE / cleanup.REPORT_HTML
-        result = {"state": "本轮已结束", "runId": run_id,
-                  "report": str(report_html if report_html.is_file() else latest),
-                  "next": "把成果报告链接发给用户，并用实测结果简短总结后结束本轮对话。"}
-        s["finished"] = True
-        return result
+        cleanup.ordinary_path(cleanup.run_directory(run_id, BASE) / "run.json")
+        with review_lock(run_id):
+            result = apply_batch_decision(run_id, revision, decision)
+        if decision in ("finish", "skip"):
+            return result
+        return {**open_review(run_id, open_browser=open_browser), **batch_status(run_id)}
+
+
+SETTINGS_ENTRIES = {"installed-apps": "ms-settings:appsfeatures", "storage": "ms-settings:storagesense"}
+BROWSER_ENTRIES = {
+    "chrome": ("chrome.exe", "chrome://settings/clearBrowserData", "打开 Chrome 清理设置"),
+    "edge": ("msedge.exe", "edge://settings/clearBrowserData", "打开 Edge 清理设置"),
+}
+BROWSER_INSTALL_DIRS = {"chrome.exe": "Google/Chrome/Application",
+                        "msedge.exe": "Microsoft/Edge/Application"}
+
+
+def launch_entries(plan):
+    if plan.get("simulation"):
+        return {}
+    entries = {}
+    if isinstance(plan.get("applications"), list):
+        entries["installed-apps"] = ("installed-apps", "打开 Windows 已安装应用")
+    rows = {row["id"]: row for row in plan["found"]}
+    for proposal in plan["proposals"]:
+        if proposal["action"] != "app-clean":
+            continue
+        row = rows.get(proposal["id"])
+        if not row:
+            continue
+        parts = tuple(part.casefold() for part in Path(row["path"]).parts)
+        browser = next((key for key, vendor in (("chrome", "google"), ("edge", "microsoft"))
+                        if any(parts[i:i+3] == (vendor, key, "user data")
+                               for i in range(1, len(parts) - 2))), None)
+        if browser:
+            entries[proposal["id"]] = (browser, BROWSER_ENTRIES[browser][2])
+        elif len(parts) == 6 and parts[1] == "users" and parts[3:] == ("appdata", "local", "temp"):
+            entries[proposal["id"]] = ("storage", "打开 Windows 存储设置")
+    return entries
+
+
+def registered_browser(filename):
+    from app_usage import executable
+
+    key_name = r"Software\Microsoft\Windows\CurrentVersion\App Paths" + "\\" + filename
+    views = ((winreg.HKEY_CURRENT_USER, 0), (winreg.HKEY_LOCAL_MACHINE, winreg.KEY_WOW64_64KEY),
+             (winreg.HKEY_LOCAL_MACHINE, winreg.KEY_WOW64_32KEY))
+    for hive, view in views:
+        try:
+            with winreg.OpenKey(hive, key_name, 0, winreg.KEY_READ | view) as key:
+                candidate = executable(str(winreg.QueryValueEx(key, "")[0]))
+            if candidate is not None and candidate.name.casefold() == filename and candidate.is_file():
+                cleanup.ordinary_path(candidate)
+                return candidate
+        except OSError:
+            continue
+    for variable in ("ProgramFiles", "ProgramFiles(x86)", "LocalAppData"):
+        folder = os.environ.get(variable)
+        if not folder:
+            continue
+        candidate = Path(folder) / BROWSER_INSTALL_DIRS[filename] / filename
+        try:
+            if candidate.is_file():
+                cleanup.ordinary_path(candidate)
+                return candidate
+        except OSError:
+            continue
+    raise ValueError("找不到该浏览器的安装入口，请从开始菜单打开。")
+
+
+def launch_entry(s, payload):
+    if (s["test"] or expired(s) or not isinstance(payload, dict) or set(payload) != {"id"}
+            or not isinstance(payload["id"], str)):
+        raise ValueError("请从当前工作台打开已支持的入口。")
+    entry = launch_entries(s["plan"]).get(payload["id"])
+    if entry is None:
+        raise ValueError("该项目没有可打开的入口。")
+    key, label = entry
+    if key in SETTINGS_ENTRIES:
+        os.startfile(SETTINGS_ENTRIES[key])
+    else:
+        filename, url, _ = BROWSER_ENTRIES[key]
+        path = registered_browser(filename)
+        subprocess.Popen([str(path), url], cwd=path.parent)
+    return {"state": "opened", "label": label}
 
 
 def status_detail(s):
     """返回页面轮询用的阶段状态、剩余未选项与最新磁盘可用空间。"""
-    data = {"phase": "awaiting_selection", "message": "等待勾选", "submitted": s["ids"] is not None,
-            "ids": s["ids"] or [], "finished": False, "reviewed": False,
-            "unselected": [], "volumes": None}
+    choice = s["choice"]
+    now = time.time()
+    data = {"phase": "awaiting_selection", "message": "等待勾选", "submitted": choice is not None,
+            "ids": choice["ids"] if choice else [], "finished": False, "reviewed": False,
+            "unselected": [], "volumes": None, "serverNow": now, "expiresAt": s["expires_at"],
+            "canExtend": choice is None and now < s["expires_at"],
+            "batch": len(s["plan"].get("batchHistory", [])) + 1}
+    if choice:
+        data["decisions"] = choice.get("decisions", [])
+    if not s["test"]:
+        current = read_run(s["plan"]["runId"])
+        if current["revision"] != s["plan"]["revision"]:
+            raise ReviewUpdated("已进入下一批。请从原对话打开下一批工作台。")
+        if current.get("finalizedAt"):
+            data.update(phase="finished", message="本次任务已结束，汇总报告已生成。",
+                        canExtend=False, finished=True)
+            return data
+        data["canSkip"] = choice is None and "deep" not in current
+    if choice is None and now >= s["expires_at"]:
+        data.update(phase="expired", message="提交时间已到。请回到原对话重新打开工作台。")
+        return data
     if s.get("finished"):
         data.update(phase="finished", message="本轮已结束，成果报告已生成。", finished=True, reviewed=True)
         return data
@@ -335,37 +589,44 @@ def status_detail(s):
         data.update(phase="done", message=f"测试完成 · {r['disk']} 盘可用 {r['free']/1024**3:.2f} GiB。",
                     finished=True, volumes=s["result"]["volumes"])
         return data
-    if s["ids"] is not None and not s["received"]:
-        data["message"] = "已提交，等待当前对话领取。"
-    if s["ids"] is not None and not s["received"]:
-        data["phase"] = "submitted"
+    if choice and not s["received"]:
+        data.update(phase="submitted", message="选择已保存，等待 WorkBuddy 领取。")
     if s["received"] and not s["test"]:
-        data["phase"] = "applying"
-        data["message"] = "当前对话已领取选择，等待执行结果。"
-        state = read_run(s["plan"]["runId"])
+        data.update(phase="received", message="WorkBuddy 已领取，等待执行结果。")
+        state = current
+        progress = cleanup.batch_progress(state)
+        data["batch"] = progress["batch"]
+        if progress["phase"] == "finished":
+            data.update(phase="finished", message="本次任务已结束，汇总报告已生成。", finished=True, reviewed=True)
+            return data
         deep = state.get("deep") or {}
         samples = [x for x in (deep.get("reviews") or []) + [deep.get("after"), state.get("created")] if x]
         if samples:
             data["volumes"] = samples[-1].get("volumes")
         if deep:
-            if set(deep.get("selected", [])) != set(s["ids"]):
+            if set(deep.get("selected", [])) != set(choice["ids"]):
                 data["message"] = "本轮已由另一份选择处理。请查看原对话。"
                 return data
-            chosen = set(deep["selected"])
-            data["unselected"] = [{"id": p["id"], "name": p.get("recommendation", "")[:40], "disk": ""}
-                                  for p in s["plan"]["proposals"] if p["id"] not in chosen]
-            done = all(not str(e.get("status", "")).startswith("待 WorkBuddy") for e in deep["entries"])
-            data["phase"] = "verified" if done else "awaiting_manual"
-            data["message"] = "已复核完成，可结束本轮。" if done else "部分项目需在应用/系统设置中处理，可结束本轮并查看说明。"
-            data["reviewed"] = done
-            data["canFinish"] = True
+            rows = {row["id"]: row for row in state["found"]}
+            data["unselected"] = [{"id": p["id"], "name": rows[p["id"]]["name"], "disk": rows[p["id"]]["disk"]}
+                                  for p in cleanup.available_proposals(state)]
+            data["reviewed"] = data["canFinish"] = progress["phase"] == "ready"
+            data["canContinue"] = data["reviewed"] and progress["remainingCount"] > 0
+            if data["reviewed"]:
+                data.update(phase="verified", message=("本批已复核，可继续处理剩余项或结束任务。"
+                                                         if data["canContinue"] else
+                                                         "本批已复核，所有可选项已处理。"))
+            elif progress["phase"] == "awaiting_manual":
+                data.update(phase="awaiting_manual", message="本批仍有需要在应用或系统设置中处理的项目。")
+            else:
+                data["message"] = "已记录处理结果，等待本批复核。"
     elif s["received"]:
-        data["phase"] = "done"
+        data.update(phase="received", message="WorkBuddy 已领取，等待读取可用空间。")
     return data
 
 
-def status(s):
-    return status_detail(s)["message"]
+class InactiveReview(ValueError):
+    pass
 
 
 class Page(BaseHTTPRequestHandler):
@@ -411,31 +672,36 @@ class Page(BaseHTTPRequestHandler):
         host = self.headers.get("Host") or ""
         if not re.fullmatch(r"127\.0\.0\.1:\d{2,5}", host):
             raise ValueError("连接目标不匹配。")
-        match = re.fullmatch(r"/([A-Za-z0-9_-]{32})/(status|submit|finish)?", self.path)
+        match = re.fullmatch(r"/([A-Za-z0-9_-]{32})/(status|submit|extend|continue|finish|launch)?", self.path)
         if not match:
             raise ValueError("链接无效。")
         with guard:
             for handle, s in sessions.items():
                 if secrets.compare_digest(s["view"], match[1]):
                     return session_for(handle), match[2]
-        raise ValueError("本轮链接已失效。")
+        raise InactiveReview("本轮链接已失效。")
 
     def do_GET(self):
         try:
             s, route = self.target()
             if route == "status":
                 with guard:
-                    # 页面开着就在用：每次状态轮询滑动续期，避免逐项核对时会话超时中断。
-                    s["expires"] = time.monotonic() + TTL
-                    self.respond(200, status_detail(s))
+                    data = status_detail(session_for(s["handle"]))
+                self.respond(200, data)
             elif route is None:
                 source = read_run(s["plan"]["runId"]) if s["received"] and not s["test"] else s["plan"]
                 plan = {**source, "liveReview": True, "archived": False}
+                if not s["test"]:
+                    plan["launchOptions"] = {item: label for item, (_, label) in launch_entries(source).items()}
                 data = json.dumps(plan, ensure_ascii=False).replace("<", "\\u003c")
                 html = (BASE/"disk_cleanup_template.html").read_text(encoding="utf-8-sig")
                 self.respond(200, html.replace("<!--RUN-DATA-->", data, 1), "text/html")
             else:
                 self.respond(404, {})
+        except ReviewUpdated as exc:
+            self.respond(410, {"error": str(exc)})
+        except InactiveReview as exc:
+            self.respond(404, {"error": str(exc)})
         except (OSError, ValueError) as exc:
             self.respond(409, {"error": str(exc)})
 
@@ -447,45 +713,72 @@ class Page(BaseHTTPRequestHandler):
             # 同样只校验"来自本机某个端口"，不绑定具体端口号
             if not (re.fullmatch(r"http://127\.0\.0\.1:\d{2,5}", origin) and kind == "application/json"):
                 raise ValueError("请在本轮工作台提交。")
-            if route == "finish":
-                with guard:
-                    if s["ids"] is None or not s["received"]:
-                        raise ValueError("本轮尚未提交或执行，无法结束。")
-                    if not s["finished"]:
-                        s["finished"] = True
-                        s["finish"].set()
-                self.respond(200, {"state": "finishing"})
+            if route == "continue":
+                if s["test"] or not s["received"]:
+                    raise ValueError("本批复核完成后才能继续。")
+                plan = s["plan"]
+                result = batch_decision(plan["runId"], plan["revision"], "continue")
+                self.respond(200, {"page": result["page"], "batch": result["batch"]})
                 return
-            if route != "submit":
+            if route not in ("submit", "extend", "finish", "launch"):
                 raise ValueError("请在本轮工作台提交。")
-            length = int(self.headers.get("Content-Length", 0))
-            if not 0 < length <= 32768:
-                raise ValueError("选择无效。")
-            body = self.rfile.read(length)
-            payload = json.loads(body)
-            with guard:
-                if not isinstance(payload, dict):
+            payload = None
+            if route != "finish":
+                length = int(self.headers.get("Content-Length", 0))
+                if not 0 < length <= 32768:
                     raise ValueError("选择无效。")
-                ids = validate_selection(s, payload)
-                if s["ids"] is not None and ids != s["ids"]:
-                    raise ValueError("当前会话已有提交。")
-                s["ids"] = ids
-                decisions = payload.get("decisions")
-                if decisions is not None:
-                    s["decisions"] = decisions
-                    s["decisionDigest"] = cleanup.decisions_digest(decisions)
-                if not s["test"]:
-                    # 提交即落盘，避免对话端 15 分钟内未领取导致选择丢失。
-                    choice = {"runId": s["plan"]["runId"], "revision": s["plan"]["revision"],
-                              "ids": ids, "reviewDigest": s["digest"]}
-                    if decisions is not None:
-                        choice["decisions"] = decisions
-                        choice["decisionDigest"] = s["decisionDigest"]
-                    cleanup.dump(choice_path(s["plan"]["runId"], s["handle"]), choice)
-                s["event"].set()
-            self.respond(200, {"state": "submitted"})
+                payload = json.loads(self.rfile.read(length))
+            with guard:
+                if s["test"]:
+                    result = update_review(session_for(s["handle"]), route, payload)
+                else:
+                    with review_lock(s["plan"]["runId"]):
+                        result = update_review(session_for(s["handle"]), route, payload)
+            self.respond(200, result)
+        except ReviewUpdated as exc:
+            self.respond(410, {"error": str(exc)})
+        except InactiveReview as exc:
+            self.respond(404, {"error": str(exc)})
         except (OSError, ValueError, KeyError) as exc:
             self.respond(409, {"error": str(exc)})
+
+
+def update_review(s, route, payload):
+    plan = s["plan"]
+    if not s["test"] and read_run(plan["runId"])["revision"] != plan["revision"]:
+        raise ReviewUpdated("已进入下一批。请从原对话打开下一批工作台。")
+    if route == "launch":
+        return launch_entry(s, payload)
+    if route == "submit":
+        if not s["test"] and read_run(plan["runId"]).get("finalizedAt"):
+            raise ValueError("本次任务已经结束。")
+        save_choice(s, payload)
+        return {"state": "submitted"}
+    if route == "extend":
+        if payload != {"expiresAt": s["expires_at"]}:
+            raise ValueError("提交期限已更新，请查看工作台上的剩余时间。")
+        if s["choice"] is not None or expired(s):
+            raise ValueError("只有仍可提交的工作台能延长时间。")
+        s["expires_at"] += EXTENSION_SECONDS
+        save_session(s)
+        return status_detail(s)
+    if s["finished"]:
+        return {"state": "finished"}
+    status = status_detail(s)
+    if status["finished"]:
+        return {"state": "finished"}
+    if status.get("canSkip"):
+        apply_batch_decision(plan["runId"], plan["revision"], "skip")
+        s["event"].set()
+        return {"state": "finished"}
+    if not status.get("canFinish"):
+        raise ValueError("本批复核完成后可以结束本次任务。")
+    apply_batch_decision(plan["runId"], plan["revision"], "finish")
+    s["finished"] = True
+    save_session(s)
+    s["finish"].set()
+    return {"state": "finished"}
+
 
 
 def tool(name, description, properties, required=()):
@@ -495,11 +788,17 @@ def tool(name, description, properties, required=()):
 
 HANDLE = {"handle": {"type":"string"}}
 TOOLS = [
-    tool("open_review", "打开当前任务的磁盘选择页。test=true 只做无删除链路测试；正式任务传 run_id；同一轮重复打开默认返回原页面，recover=true 强制接管。返回页面链接与对话等候凭据。",
+    tool("open_review", "打开当前任务的磁盘选择页。test=true 只做无删除链路测试；正式任务传 run_id；同一有效轮次复用原页面和已保存回执；recover=true 仅能换掉未提交的页面。返回页面链接与对话等候凭据。",
          {"run_id":{"type":"string"}, "test":{"type":"boolean"}, "recover":{"type":"boolean"}}),
-    tool("wait_review", "在发出页面链接的原对话领取用户勾选的清单（含最终动作与目标盘）；等待超时继续调用。", HANDLE, ["handle"]),
+    tool("wait_review", "在发出页面链接的原对话领取用户勾选的清单（含最终动作与目标盘）；单次等待结束请继续调用，直到收到回执或工作台过期。", HANDLE, ["handle"]),
     tool("read_test_space", "完成已经领取的只读磁盘测试并返回实测值。", HANDLE, ["handle"]),
     tool("wait_finish", "apply 和 verify 完成后调用，等待用户在页面点「结束本轮清理」，返回成果报告路径；等待超时继续调用。", HANDLE, ["handle"]),
+    tool("batch_status", "查看当前批次、是否已复核、剩余可选数量或最终报告。用于原对话继续任务。",
+         {"run_id": {"type": "string"}}, ["run_id"]),
+    tool("batch_decision", "根据用户明确选择继续、复核后结束，或未提交时选 skip 结束并生成报告。",
+         {"run_id": {"type": "string"}, "revision": {"type": "string"},
+          "decision": {"type": "string", "enum": ["continue", "finish", "skip"]}},
+         ["run_id", "revision", "decision"]),
 ]
 
 
@@ -509,14 +808,15 @@ def dispatch(request):
     if method == "initialize":
         supported = ("2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05")
         return {"protocolVersion": params.get("protocolVersion") if params.get("protocolVersion") in supported else supported[0],
-                "capabilities":{"tools":{}}, "serverInfo":{"name":"disk-cleanup-review", "version":"1.4.4"}}
+                "capabilities":{"tools":{}}, "serverInfo":{"name":"disk-cleanup-review", "version":"1.5.4"}}
     if method == "ping":
         return {}
     if method == "tools/list":
         return {"tools": TOOLS}
     if method == "tools/call":
         funcs = {"open_review":open_review, "wait_review":wait_review,
-                 "read_test_space":read_test_space, "wait_finish":wait_finish}
+                 "read_test_space":read_test_space, "wait_finish":wait_finish,
+                 "batch_status":batch_status, "batch_decision":batch_decision}
         try:
             value = funcs[params["name"]](**params.get("arguments", {}))
             return {"content":[{"type":"text", "text":json.dumps(value, ensure_ascii=False)}]}

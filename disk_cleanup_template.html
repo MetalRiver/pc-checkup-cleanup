@@ -80,6 +80,23 @@ small{color:var(--muted)}
 .phase-pill{display:inline-flex;align-items:center;gap:6px;font-size:12px;padding:4px 11px;border-radius:999px;background:#eaf1fe;color:#2f6fdb;font-weight:700}
 .phase-pill.verified{background:#e6f5ec;color:#176c49}
 .phase-pill.wait{background:#fff2e4;color:#a55b12}
+.review-status{display:flex;align-items:center;flex-wrap:wrap;gap:8px 12px}
+.deadline{font-size:13px;color:#334a66}
+header .frame{flex-wrap:wrap;padding-block:8px}
+.header-actions{display:flex;align-items:center;gap:8px 12px;flex-wrap:wrap}
+header .deadline{color:#fff;background:#244263;padding:6px 10px;border-radius:8px;white-space:nowrap}
+header .deadline strong{font-size:16px}
+.application-row{display:grid;grid-template-columns:minmax(150px,1fr) minmax(160px,1fr);gap:8px 16px;
+  border-bottom:1px solid var(--line);padding:12px}
+.application-row small{display:block;color:var(--muted);overflow-wrap:anywhere}
+.launch-btn{border:1px solid #aac2e3;border-radius:8px;background:#fff;color:#215da7;
+  padding:6px 10px;font-size:13px;cursor:pointer}
+.launch-btn:disabled{opacity:.55;cursor:default}
+.launch-line{margin:8px 0 0}
+@media(max-width:520px){.application-row{grid-template-columns:1fr}}
+#review-countdown{font-variant-numeric:tabular-nums}
+.extend-btn{border:1px solid #aac2e3;border-radius:8px;background:#fff;color:#215da7;padding:4px 9px;font-size:12px}
+.extend-btn:disabled{opacity:.55;cursor:default}
 header .finish-btn{background:#2fbf78;color:#06251a;font-size:12px;padding:7px 14px;border:none;border-radius:999px;font-weight:700}
 header .finish-btn:disabled{background:rgba(255,255,255,.16);color:#a9bdd6;cursor:default}
 /* 基础清理 / 深度清理 展示卡片 */
@@ -209,17 +226,26 @@ button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible,su
 </head>
 <body>
 <header><div class="frame"><span class="wordmark">磁盘清理工作台</span>
-  <span style="display:flex;align-items:center;gap:14px"><span id="live-badge" hidden style="font-size:12px;color:#bfe8d2;background:rgba(255,255,255,.12);padding:3px 9px;border-radius:999px">● 已连接当前对话</span><button type="button" id="finish-btn" class="finish-btn" hidden disabled>结束本轮清理并生成报告</button></span>
+  <div class="header-actions">
+    <span class="deadline" id="review-deadline" hidden><span id="deadline-caption">还可提交</span> <strong id="review-countdown"></strong></span>
+    <button type="button" class="extend-btn" id="review-extend" hidden>延长 2 小时</button>
+    <span id="live-badge" hidden style="font-size:12px;color:#bfe8d2;background:rgba(255,255,255,.12);padding:3px 9px;border-radius:999px">连接本地服务中</span>
+    <button type="button" id="finish-btn" class="finish-btn" hidden disabled>结束本次任务</button>
+  </div>
 </div></header>
 <main class="frame">
   <h1 id="title">深度清理</h1>
   <p id="subtitle"></p>
-  <div><span class="phase-pill" id="phase-pill" hidden>等待勾选</span></div>
+  <div class="review-status">
+    <span class="phase-pill" id="phase-pill" role="status" hidden>等待勾选</span>
+    <button type="button" class="extend-btn" id="review-continue" hidden>继续处理剩余项</button>
+  </div>
   <div class="summary" id="summary"></div>
   <div id="composition-slot"></div>
   <nav id="tabs" aria-label="工作台视图">
     <button type="button" data-tab="decisions" aria-controls="decisions"><span class="tab-label">待你决定<span id="decision-dot" class="alert-dot" hidden></span></span></button>
     <button type="button" data-tab="findings" aria-controls="findings">全部发现</button>
+    <button type="button" data-tab="applications" aria-controls="applications" hidden>应用盘点 <span id="application-count"></span></button>
     <button type="button" data-tab="results" aria-controls="results">执行记录</button>
   </nav>
   <section id="decisions" aria-label="待你决定"></section>
@@ -227,6 +253,12 @@ button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible,su
     <div id="coverage"></div>
     <div class="tools"><input id="search" type="search" placeholder="搜索名称或路径" aria-label="搜索名称或路径"><select id="disk" aria-label="筛选磁盘"><option value="">全部磁盘</option></select></div>
     <div id="found"></div>
+  </section>
+  <section id="applications" aria-label="应用盘点" hidden>
+    <div class="tools"><input id="application-search" type="search" placeholder="搜索应用或发布者" aria-label="搜索应用或发布者">
+      <button id="manage-installed" type="button" class="launch-btn" data-launch="installed-apps" hidden>打开 Windows 已安装应用</button>
+    </div>
+    <div class="panel" id="application-list"></div>
   </section>
   <section id="results" aria-label="执行记录" hidden></section>
 </main>
@@ -399,6 +431,49 @@ function tab(id) {
   if (run.deep) { const s = get('submit'); if (s) s.hidden = true; }
 }
 
+function renderApplications() {
+  const query = get('application-search').value.trim().toLocaleLowerCase();
+  const apps = run.applications.filter(app =>
+    (app.name + ' ' + app.publisher + ' ' + app.path).toLocaleLowerCase().includes(query));
+  get('application-list').innerHTML = apps.map(app => {
+    const usage = Number.isInteger(app.recordedDays)
+      ? '系统启动记录 · ' + app.recordedAt + '（距今 ' + app.recordedDays + ' 天）'
+      : '未取得可匹配的启动记录';
+    const label = app.running ? '发现运行进程 · 建议保留'
+      : app.review === 'keep' ? '有近期启动记录 · 建议保留' : '近期使用情况未知';
+    return '<div class="application-row"><div><strong>' + escape(app.name) + '</strong>'
+      + '<small>' + escape(app.publisher || '') + '</small><small>' + escape(app.path || '') + '</small></div>'
+      + '<div><strong>' + label + '</strong><small>' + escape(usage) + '</small></div></div>';
+  }).join('') || '<p>没有匹配的应用。</p>';
+}
+
+function launchButton(id) {
+  const label = run.launchOptions?.[id];
+  if (!label) return '';
+  return '<div class="launch-line"><button type="button" class="launch-btn" data-launch="'
+    + escape(id) + '">' + escape(label) + '</button></div>';
+}
+
+async function openApplication(button) {
+  if (button.disabled) return;
+  if (statusFailures > 0) {
+    notify('err', '本地服务未连接', '请回原对话恢复当前工作台后再试。');
+    return;
+  }
+  button.disabled = true;
+  try {
+    const response = await fetch(apiBase + 'launch', {method:'POST', signal:AbortSignal.timeout(8000),
+      headers:{'Content-Type':'application/json'}, body:JSON.stringify({id:button.dataset.launch})});
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || '无法打开入口');
+    notify('ok', '已请求打开', '请在对应窗口核对并自行确认需要处理的内容。');
+  } catch (error) {
+    notify('err', '打开失败', error.message);
+  } finally {
+    button.disabled = false;
+  }
+}
+
 function delta(before, after, disk) {
   const start = before?.volumes.find(row => row.disk === disk)?.free;
   const end = after?.volumes.find(row => row.disk === disk)?.free;
@@ -475,7 +550,7 @@ function findings() {
       statusTag = '<span class="status-tag can-move">可搬迁 → ' + escape(p.targetDisk || '待选') + ' 盘</span>';
     } else if (p) {
       statusTag = '<span class="status-tag can-handle">已在「待你决定」· ' + escape(actionName[p.action] || p.action) + '</span>';
-    } else if (row.kind === 'system' || row.kindName === '系统') {
+    } else if (['system','installed-app','app-data'].includes(row.kind) || row.kindName === '系统') {
       statusTag = '<span class="status-tag protected">系统/软件目录 · 不建议动</span>';
     } else {
       statusTag = '<span class="status-tag observe">仅展示 · 本轮不处理</span>';
@@ -485,7 +560,9 @@ function findings() {
     return '<div class="finding">'
       + '<div><span class="name">' + escape(row.name) + '</span> ' + purposeTag + nameZh
       + '<br><small>' + escape(row.path)
-      + '</small>' + kidsHint + '</div><span class="number">' + (row.pending || row.errors ? '≥ ' : '') + size(row.bytes)
+      + '</small>' + kidsHint
+      + (row.actionHint ? '<br><small>' + escape(row.actionHint) + '</small>' : '')
+      + '</div><span class="number">' + (row.pending || row.errors ? '≥ ' : '') + size(row.bytes)
       + '</span><small>' + statusTag + ' · ' + escape(row.coverage) + (row.pending ? ' · 扫描未完成' : '')
       + (row.errors ? ' · 未读取 ' + row.errors + ' 处' : '')
       + (row.links ? ' · 跳过重解析项或重复硬链接 ' + row.links + ' 处' : '') + '</small></div>';
@@ -710,7 +787,8 @@ function paintDecisionRows(rows) {
         + (row.nameZh ? '<span class="name-zh">' + escape(row.nameZh) + '</span>' : '')
         + '<small>' + (row.pending || row.errors ? '已读取部分 ' : '当前记录 ') + size(row.bytes) + '</small></div>'
         + '<div class="description">' + aiLine + whyLine + appTag + deleteTag + '<p>'
-        + escape(p.recommendation) + '</p><small class="impact">' + escape(p.impact) + '</small></div>'
+        + escape(p.recommendation) + '</p><small class="impact">' + escape(p.impact) + '</small>'
+        + (dec.action === 'app-clean' ? launchButton(p.id) : '') + '</div>'
         + '<span class="number">' + size(p.estimate) + '</span>'
         + '<label class="checkbox"><input type="checkbox" value="' + escape(p.id) + '"'
         + (selectedIds.has(p.id) ? ' checked' : '') + (locked ? ' disabled' : '')
@@ -740,8 +818,8 @@ function selectionSummary() {
   get('selection').textContent = chosen.length
     ? '已选 ' + chosen.length + ' 项' + estimates + mixText + (unknown ? ' · ' + unknown + ' 项待测' : '')
     : '尚未选择';
-  get('submit').disabled = !chosen.length || locked;
-  if (!submitted) get('export-status').textContent = '提交后工作台会保持在线，执行完成再点「结束本轮清理」。';
+  get('submit').disabled = !chosen.length || locked || statusFailures > 0;
+  if (!submitted) get('export-status').textContent = '提交后可在这里查看领取和处理状态。';
 }
 
 let sending = false;
@@ -749,10 +827,10 @@ let submitted = false;
 function lockSelection(lock) {
   locked = lock;
   get('decisions').querySelectorAll('input[type=checkbox]').forEach(input => input.disabled = lock);
-  get('decision-rows').querySelectorAll('select').forEach(sel => sel.disabled = lock);
+  get('decisions').querySelectorAll('select').forEach(select => select.disabled = lock);
   const batch = get('batch-apply');
   if (batch) { batch.disabled = lock; const clear = get('batch-clear'); if (clear) clear.disabled = lock; }
-  get('submit').disabled = lock || !selected().length;
+  get('submit').disabled = lock || !selected().length || statusFailures > 0;
 }
 function updateFinishButton(data) {
   const btn = get('finish-btn');
@@ -760,10 +838,16 @@ function updateFinishButton(data) {
   if (data.phase === 'finished' || data.finished) {
     btn.hidden = false; btn.disabled = true; btn.textContent = '本轮已结束'; return;
   }
-  if (data.reviewed || data.canFinish) {
-    btn.hidden = false; btn.disabled = false; btn.textContent = '结束本轮清理并生成报告';
+  if (data.canFinish) {
+    btn.hidden = false; btn.disabled = false; btn.textContent = '结束本次任务';
+    btn.dataset.skip = 'false';
+  } else if (data.canSkip) {
+    btn.hidden = false; btn.disabled = false; btn.textContent = '本轮不清理';
+    btn.dataset.skip = 'true';
   } else if (data.submitted) {
     btn.hidden = false; btn.disabled = true; btn.textContent = '执行完成后可结束';
+  } else {
+    btn.hidden = true; btn.disabled = true;
   }
 }
 
@@ -776,7 +860,7 @@ function showRemaining(data) {
     get('decisions').appendChild(box);
   }
   const rows = new Map((run.found || []).map(r => [r.id, r]));
-  box.innerHTML = '<b>本轮未处理 ' + list.length + ' 项</b>'
+  box.innerHTML = '<b>可在下一批继续处理 ' + list.length + ' 项</b>'
     + '<div style="margin-top:4px">这些项目本轮未勾选或已跳过，保留到下一轮处理。</div>'
     + '<ul>' + list.map(p => {
         const row = rows.get(p.id);
@@ -798,49 +882,119 @@ function updateVolumes(data) {
 }
 
 let statusFailures = 0;
+let deadlineState = null;
+let extending = false;
+
+function updateCountdown() {
+  const visible = deadlineState && !submitted && !deadlineState.finished && Number.isFinite(deadlineState.expiresAt);
+  get('review-deadline').hidden = !visible;
+  const extend = get('review-extend');
+  extend.hidden = !visible || !deadlineState?.canExtend;
+  if (!visible) return;
+  const now = deadlineState.serverNow + (statusFailures ? 0 : (performance.now() - deadlineState.syncedAt) / 1000);
+  get('deadline-caption').textContent = statusFailures ? '上次同步剩余' : '还可提交';
+  const seconds = Math.max(0, Math.ceil(deadlineState.expiresAt - now));
+  get('review-countdown').textContent = [Math.floor(seconds / 3600), Math.floor(seconds / 60) % 60, seconds % 60]
+    .map(number => String(number).padStart(2, '0')).join(':');
+  extend.disabled = extending || statusFailures > 0 || seconds === 0;
+}
+
+function syncDeadline(data) {
+  // A status request can overlap an extension. Ignore a response from before that extension.
+  if (deadlineState && data.serverNow < deadlineState.serverNow) return;
+  deadlineState = {...data, syncedAt: performance.now()};
+  updateCountdown();
+}
+
+async function extendReview() {
+  if (extending || !deadlineState?.canExtend || submitted) return;
+  extending = true;
+  updateCountdown();
+  try {
+    const response = await callRoute('extend', {method:'POST', headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({expiresAt: deadlineState.expiresAt})});
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || '延长失败');
+    syncDeadline(data);
+  } catch (error) {
+    notify('err', '暂时无法延长', error.message);
+  } finally {
+    extending = false;
+    updateCountdown();
+  }
+}
+
 async function readStatus() {
   try {
     const response = await callRoute('status', {cache:'no-store'});
     const data = await response.json();
+    if (response.status === 410) {
+      get('live-badge').textContent = '当前批次已切换';
+      get('phase-pill').textContent = '已进入下一批';
+      get('phase-pill').hidden = false;
+      deadlineState = null;
+      updateCountdown();
+      lockSelection(true);
+      get('finish-btn').hidden = true;
+      get('review-continue').hidden = true;
+      get('export-status').textContent = data.error;
+      return;
+    }
     if (!response.ok) throw new Error(data.error || '连接失效');
+    const reconnected = statusFailures > 0;
     statusFailures = 0;
+    if (reconnected && !submitted) selectionSummary();
+    if (reconnected) get('review-continue').disabled = false;
+    get('live-badge').textContent = '本地服务已连接';
+    syncDeadline(data);
     const phase = get('phase-pill');
     if (phase) {
       phase.hidden = false;
       phase.className = 'phase-pill ' + (data.phase === 'verified' || data.finished ? 'verified'
-        : data.phase === 'applying' || data.phase === 'awaiting_manual' ? 'wait' : '');
-      phase.textContent = ({awaiting_selection:'等待勾选', applying:'执行中', verified:'已复核完成',
-        awaiting_manual:'待人工处理', finished:'已结束', done:'已完成'})[data.phase] || data.phase;
+        : ['submitted','received','awaiting_manual','expired'].includes(data.phase) ? 'wait' : '');
+      phase.textContent = ({awaiting_selection:'等待勾选', submitted:'选择已保存 · 等待领取',
+        received:'WorkBuddy 已领取', verified:'本批已复核', awaiting_manual:'待人工处理',
+        finished:'已结束', done:'已完成', expired:'提交时间已到'})[data.phase] || data.phase;
     }
     updateVolumes(data);
     if (data.submitted && !submitted) {
       submitted = true;
       selectedIds.clear();
       data.ids.forEach(id => selectedIds.add(id));
-      get('decisions').querySelectorAll('input[type=checkbox]').forEach(input => input.checked = selectedIds.has(input.value));
+      (data.decisions || []).forEach(item => decisions.set(item.id, {action:item.action, targetDisk:item.targetDisk}));
+      renderDecisions();
       selectionSummary(); lockSelection(true);
+      updateCountdown();
     }
-    if (data.reviewed && !run.deep) { location.reload(); return; }
+    if (run.liveReview && data.reviewed && !run.deep) { location.reload(); return; }
+    updateFinishButton(data);
+    if (data.phase === 'expired') {
+      lockSelection(true);
+      get('export-status').textContent = data.message;
+      return;
+    }
     if (data.submitted) {
       get('export-status').textContent = data.message || '';
       showRemaining(data);
-      updateFinishButton(data);
+      get('review-continue').hidden = !data.canContinue;
     }
     if (data.finished) {
-      notify('ok', '本轮已结束', '成果报告已生成，请查看执行记录或在原对话领取报告链接。');
+      lockSelection(true);
+      notify('ok', '本轮已结束', data.message);
       return;
     }
     setTimeout(readStatus, 2000);
   } catch {
     statusFailures++;
-    if (statusFailures <= 3) {
-      // 偶发抖动：静默重试，别急着弹"连接中断"吓人
-      setTimeout(readStatus, 1500 * statusFailures);
-      return;
+    get('live-badge').textContent = '本地服务重连中';
+    get('finish-btn').disabled = true;
+    get('submit').disabled = true;
+    get('review-continue').disabled = true;
+    updateCountdown();
+    if (statusFailures >= 3) {
+      get('export-status').textContent = '连接中断。可回原对话说「重新打开本轮工作台」或「本轮不清理」，无需重扫。';
     }
-    // 连续失败才判定真中断，并给一条可操作的引导
-    get('export-status').textContent = '连接中断。请回到原对话，让助手重新打开本轮工作台后再提交（你已勾选的选择不会保存在此页面）。';
-    if (get('dialog-mask').hidden) notify('err', '工作台连接中断', '实时状态读取失败。请回到原对话，让助手重新打开本轮工作台；若已提交请直接回「已提交」。');
+    setTimeout(readStatus, Math.min(15000, 1500 * statusFailures));
   }
 }
 
@@ -849,15 +1003,36 @@ async function finishRound() {
   if (!btn || btn.disabled) return;
   btn.disabled = true;
   try {
+    if (btn.dataset.skip === 'true' && selected().length) {
+      const yes = await confirmDialog('warn', '结束本次任务？',
+        '当前勾选还没提交。结束后只保留已经完成的结果。', [], '结束任务', '继续查看');
+      if (!yes) { btn.disabled = false; return; }
+    }
     const response = await callRoute('finish', {method:'POST', headers:{'Content-Type':'application/json'}, body:'{}'});
     const data = await response.json();
     if (!response.ok) throw new Error(data.error || '结束失败');
     btn.textContent = '已通知 WorkBuddy';
-    notify('ok', '已结束本轮清理', '成果报告已生成，WorkBuddy 正在整理最终结果。');
-    get('export-status').textContent = '本轮已结束，请在原对话查看成果报告。';
+    lockSelection(true);
+    notify('ok', '本次任务已结束', '汇总报告已生成，请在原对话查看。');
+    get('export-status').textContent = '本次任务已结束，请在原对话查看汇总报告。';
   } catch (error) {
     btn.disabled = false;
     notify('err', '结束失败', error.message);
+  }
+}
+
+async function continueRound() {
+  const button = get('review-continue');
+  if (button.disabled || button.hidden) return;
+  button.disabled = true;
+  try {
+    const response = await callRoute('continue', {method:'POST', headers:{'Content-Type':'application/json'}, body:'{}'});
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || '无法进入下一批');
+    location.assign(data.page);
+  } catch (error) {
+    notify('err', '无法进入下一批', error.message);
+    button.disabled = false;
   }
 }
 // 提交/轮询统一走这里：先当前地址，失败则在本机固定端口段内找回 bridge。
@@ -868,33 +1043,39 @@ function viewToken() {
   return m ? m[1] : '';
 }
 async function callRoute(route, options) {
+  const timeout = {...options, signal: AbortSignal.timeout(route === 'status' ? 2200 : 12000)};
   try {
-    return await fetch(apiBase + route, options);
+    const response = await fetch(apiBase + route, timeout);
+    if (response.status !== 404) return response;
   } catch (error) {
-    const token = viewToken();
-    if (!token) throw error;
-    for (let port = 8791; port <= 8810; port += 1) {
-      if (String(port) === location.port) continue;
-      const base = 'http://127.0.0.1:' + port + '/' + token + '/';
-      try {
-        const probe = await fetch(base + 'status', {mode: 'no-cors'});
-        if (!probe) continue;
-      } catch (e) { continue; }
-      try {
-        const res = await fetch(base + route, options);
-        apiBase = base;
-        return res;
-      } catch (e) { /* 继续试下一个端口 */ }
-    }
-    throw new Error('本地服务连接已断开。请回到对话，说一句「重新打开工作台」即可恢复，已勾选的内容还在。');
+    if (!viewToken()) throw error;
   }
+  const token = viewToken();
+  if (token) {
+    const bases = Array.from({length: 20}, (_, index) =>
+      'http://127.0.0.1:' + (8791 + index) + '/' + token + '/')
+      .filter(base => base !== (apiBase || location.href));
+    try {
+      const {base, response} = await Promise.any(bases.map(async base => {
+        const response = await fetch(base + 'status',
+          {cache:'no-store', signal: AbortSignal.timeout(1600)});
+        if (!response.ok) throw new Error('连接无效');
+        return {base, response};
+      }));
+      apiBase = base;
+      if (route === 'status') return response;
+      return await fetch(base + route, {...options, signal: AbortSignal.timeout(12000)});
+    } catch { /* 回到发起任务的原对话恢复 */ }
+  }
+  throw new Error('本地服务连接已断开。请在原对话重新打开同一轮工作台。');
 }
 
 async function submitSelection() {
-  if (sending || submitted) return;
+  if (sending || submitted || statusFailures > 0) return;
   const ids = selected().map(item => item.id);
   if (!ids.length) return;
   if (!run.liveReview && !run.reviewUrl) return;
+  if (deadlineState && !deadlineState.canExtend) return;
   const overlaps = overlappingPairs();
   if (overlaps.length) {
     const detail = overlaps.slice(0, 4).map(pair => pair[0].name + '（' + pair[0].path + '） ↔ ' + pair[1].name + '（' + pair[1].path + '）');
@@ -942,8 +1123,9 @@ async function submitSelection() {
     const data = await response.json();
     if (!response.ok) throw new Error(data.error || '提交失败');
     submitted = true;
-    get('export-status').textContent = '已提交，等待当前对话领取。';
-    notify('ok', '已提交给 WorkBuddy', '当前对话已收到你的选择，请回到对话查看执行结果。工作台会继续显示进度。');
+    updateCountdown();
+    get('export-status').textContent = '选择已保存，等待 WorkBuddy 领取。';
+    notify('ok', '选择已保存', '工作台会在 WorkBuddy 领取后更新状态。');
   } catch (error) {
     get('export-status').textContent = error.message;
     lockSelection(false);
@@ -956,9 +1138,13 @@ if (!run) {
   get('tabs').hidden = true;
   get('decisions').innerHTML = '<div class="panel empty">暂无排查数据。</div>';
 } else {
-  get('title').textContent = {basic:'基础清理结果',scan:'磁盘概况',deep:'深度清理'}[run.mode];
-  const latest = run.deep?.reviews?.at(-1) ?? run.deep?.after ?? run.basic?.after ?? run.created;
-  get('subtitle').textContent = '目标 ' + run.targets.join('、') + ' 盘 · 可用空间采样 ' + localTime(latest.time);
+  get('title').textContent = run.simulation ? '清理分批演示' : {basic:'基础清理结果',scan:'磁盘概况',deep:'深度清理'}[run.mode];
+  const batches = (run.batchHistory ?? []).map(batch => batch.deep).concat(run.deep ? [run.deep] : []);
+  const latestBatch = batches.at(-1);
+  const latest = latestBatch?.reviews?.at(-1) ?? latestBatch?.after ?? run.basic?.after ?? run.created;
+  const batchLabel = run.mode === 'deep' ? '第 ' + ((run.batchHistory?.length ?? 0) + 1) + ' 批 · ' : '';
+  get('subtitle').textContent = batchLabel + (run.simulation ? '虚拟数据 · ' : '') + '目标 '
+    + run.targets.join('、') + ' 盘 · 可用空间采样 ' + localTime(latest.time);
   get('summary').innerHTML = latest.volumes.map(row => {
     const basicDelta = delta(run.basic?.before, run.basic?.after, row.disk).change;
     const used = Number.isFinite(row.total) && row.total > 0
@@ -1015,12 +1201,13 @@ if (!run) {
     + '<span>逻辑大小 <b>' + size(group.removed) + '</b></span></div>'
     + (group.examples.length ? '<small>' + group.examples.map(escape).join('<br>') + '</small>' : '')
     + '</div>').join('');
-  const deepEntries = run.deep?.entries ?? [];
+  const deepEntries = batches.flatMap(batch => batch.entries);
   const deepCards = deepEntries.map(row => '<div class="mini-card">'
     + '<div class="mc-top"><span class="mc-name">' + row.disk + ' 盘 · ' + escape(row.name) + '</span>'
     + statusChip(row.status) + '</div>'
     + '<div class="mc-stat"><span>' + escape(actionName[row.action] || row.action) + '</span></div>'
     + (row.note ? '<small>' + escape(row.note) + '</small>' : '')
+    + (row.action === 'app-clean' ? launchButton(row.id) : '')
     + '</div>').join('');
   const notes = [...(run.warnings ?? []), ...(run.basic?.notes ?? [])];
   get('results').innerHTML = '<div class="panel">'
@@ -1039,8 +1226,21 @@ if (!run) {
     + '）</summary><div class="detail">' + notes.map(escape).join('<br>') + '</div></details>' : '')
     + '</div>';
   get('search').addEventListener('input', findings);
+  if (Array.isArray(run.applications)) {
+    document.querySelector('[data-tab="applications"]').hidden = false;
+    get('application-count').textContent = run.applications.length;
+    get('application-search').addEventListener('input', renderApplications);
+    get('manage-installed').hidden = !run.launchOptions?.['installed-apps'];
+    renderApplications();
+  }
+  document.addEventListener('click', event => {
+    const button = event.target.closest('button[data-launch]');
+    if (button) openApplication(button);
+  });
   get('disk').addEventListener('change', findings);
   get('submit').addEventListener('click', submitSelection);
+  get('review-extend').addEventListener('click', extendReview);
+  get('review-continue').addEventListener('click', continueRound);
   get('finish-btn').addEventListener('click', finishRound);
   get('toast-close').addEventListener('click', () => { get('toast').hidden = true; });
   get('dialog-ok').addEventListener('click', closeDialog);
@@ -1051,7 +1251,11 @@ if (!run) {
   window.addEventListener('scroll', syncToTop, { passive: true });
   toTop.addEventListener('click', () => window.scrollTo({ top: 0, behavior: 'smooth' }));
   syncToTop();
-  if (run.liveReview) { get('live-badge').hidden = false; readStatus(); }
+  if (run.liveReview) {
+    get('live-badge').hidden = false;
+    setInterval(updateCountdown, 1000);
+    readStatus();
+  }
   if (!run.liveReview && !run.reviewUrl && run.mode === 'deep' && !run.deep) {
     lockSelection(true);
     get('submit').textContent = '等待原对话连接';
